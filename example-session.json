@@ -1,0 +1,39 @@
+{
+  "session_name": "example-session",
+  "measurements": [],
+  "metadata": {},
+  "lock_config": {
+    "wheels": 3,
+    "dial_min": 0.0,
+    "dial_max": 99.0,
+    "tolerance": 1.0,
+    "turn_sequence": "LRL",
+    "flies": "fixed",
+    "notes": "",
+    "awr_low_point": null,
+    "awl_low_point": null,
+    "approx_lcp_location": 0.0,
+    "approx_rcp_location": 8.0,
+    "wheel_data": {
+      "1": {
+        "known_gates": [],
+        "suspected_gates": [],
+        "false_gates": []
+      },
+      "2": {
+        "known_gates": [],
+        "suspected_gates": [],
+        "false_gates": []
+      },
+      "3": {
+        "known_gates": [],
+        "suspected_gates": [],
+        "false_gates": []
+      }
+    },
+    "make": "LA GARD 3330",
+    "fence_type": "SPRING_LEVER",
+    "ul": "2",
+    "oval_wheels": "YES"
+  }
+}
