@@ -24,6 +24,10 @@ to work on.
 - Python 3.8 or newer
 - Dependencies listed in `requirements.txt`
 
+```bash
+pip install -r requirements.txt
+```
+
 ### Running CLAS
 
 From the project root directory:

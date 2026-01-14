@@ -64,7 +64,7 @@ from itertools import product
 # =============================================================================
 
 SAVE_EXT = ".json"
-CLAS_VERSION = "0.1.0"  # update as needed
+CLAS_VERSION = "0.1.1"  # update as needed
 
 Number = float
 Session = Dict[str, Any]
@@ -1315,6 +1315,10 @@ def _build_checkpoints(dial_min: float, dial_max: float, *, count: int = 10) -> 
 
     return checkpoints[:count]
 
+def _circular_distance(a: float, b: float, dial_min: float, dial_max: float) -> float:
+    n = (dial_max - dial_min) + 1
+    d = (a - b) % n
+    return min(d, n - d)
 
 def run_high_low_test(session: Session) -> None:
     print("\n--- High Low Test ---")
@@ -1652,12 +1656,12 @@ def isolate_wheel_3(session: Session) -> None:
 
     print("\nStart at 0, turn right (CW), 3 full turns, ending on 0 again.")
     print(f"Continue to turn right (CW), ending on the AWR Wheel Stack Low Point ({awr}).")
-    
+    safe_input("Press Enter when ready to continue: ", session)
 
     scan_rows = []
     for i, p in enumerate(scan_points, 1):
         print(f"\nPoint {i}/{len(scan_points)}")
-        print(f"Start turning left (CCW), continue until you reach ({p}).")
+        print(f"Start turning left (CCW) until you reach back to ({awr}), continue until you reach ({p}).")
         print(f"Turn right (CW) until you hit LCP.")
         raw = safe_input("  Enter LCP (or E to exit): ", session).strip()
         if raw.lower() == "e":
@@ -1691,7 +1695,7 @@ def isolate_wheel_3(session: Session) -> None:
 
             "left_contact": lcp,
             "right_contact": rcp,
-            "contact_width": rcp - lcp,
+            "contact_width": _circular_distance(rcp, lcp, dial_min, dial_max),
 
             # Isolation metadata
             "iso_test": "isolate_wheel_3",
@@ -1785,7 +1789,7 @@ def isolate_wheel_3(session: Session) -> None:
 
                 "left_contact": lcp,
                 "right_contact": rcp,
-                "contact_width": rcp - lcp,
+                "contact_width": _circular_distance(rcp, lcp, dial_min, dial_max),
 
                 "iso_test": "isolate_wheel_3",
                 "iso_test_id": iso_test_id,
@@ -1817,7 +1821,7 @@ def isolate_wheel_3(session: Session) -> None:
 
 def isolate_wheel_2(session: Session) -> None:
     """
-    Updated isolate wheel 2 workflow (guided data-entry).
+    Isolate wheel 2 workflow (guided data-entry).
     """
 
     # Ensure lock_config exists and normalized
@@ -1858,7 +1862,7 @@ def isolate_wheel_2(session: Session) -> None:
             existing_sweeps.append(int(float(s)))
     sweep_id = (max(existing_sweeps) + 1) if existing_sweeps else 1
 
-    print("\n--- Isolate Wheel 2 (Updated Logic) ---")
+    print("\n--- Isolate Wheel 2 ---")
     print("This workflow follows the incremental-offset isolation sequence.")
     print("Type 'E' at any prompt to exit back to the Test menu.\n")
 
@@ -1883,7 +1887,7 @@ def isolate_wheel_2(session: Session) -> None:
     def _suggest_stop_value(wheel_num: int) -> tuple[float | None, str]:
         """
         Suggest stop value with priority:
-          known gate -> suspected gate -> None
+          known gate -> suspected gate -> AWL/AWR low point -> None
         """
         wdata = wd.get(str(wheel_num), {}) or {}
 
@@ -1895,22 +1899,38 @@ def isolate_wheel_2(session: Session) -> None:
         if suspected is not None:
             return suspected, "suspected gate"
 
+        awl_low = lc.get("awl_low_point", None)
+        awr_low = lc.get("awr_low_point", None)
+
+        # Fallback to AWL/AWR low points by wheel + turn sequence
+        if wheel_num in (1, 3):
+            if turn_seq == "LRL":
+                if awl_low is not None:
+                    return float(awl_low), "AWL low point"
+                if awr_low is not None:
+                    return float(awr_low), "AWR low point"
+            else:  # RLR
+                if awr_low is not None:
+                    return float(awr_low), "AWR low point"
+                if awl_low is not None:
+                    return float(awl_low), "AWL low point"
+        else:  # wheel 2
+            if awr_low is not None:
+                return float(awr_low), "AWR low point"
+            if awl_low is not None:
+                return float(awl_low), "AWL low point"
+
         return None, "missing"
 
-    # Wheel 1 suggestion: known -> suspected -> AWL low point -> missing
+    # Wheel 1 suggestion: known -> suspected -> low point -> missing
     wheel_1_stop, w1_src = _suggest_stop_value(1)
-    if wheel_1_stop is None:
-        awl_low = lc.get("awl_low_point", None)
-        if awl_low is not None:
-            wheel_1_stop = float(awl_low)
-            w1_src = "AWL low point"
 
-    # Wheel 3 suggestion: known -> suspected -> missing
+    # Wheel 3 suggestion: known -> suspected -> low point -> missing
     wheel_3_stop, w3_src = _suggest_stop_value(3)
 
     # Missing prerequisites -> suggest + allow exit OR manual continue
     missing_msgs = []
-    if wheel_3_stop is None:
+    if w3_src not in ("known gate", "suspected gate"):
         missing_msgs.append(
             "Wheel 3 stop is missing (no known/suspected gate). Suggestion: isolate Wheel 3 first."
         )
@@ -2083,7 +2103,7 @@ def isolate_wheel_2(session: Session) -> None:
 
                 "left_contact": lcp,
                 "right_contact": rcp,
-                "contact_width": rcp - lcp,
+                "contact_width": _circular_distance(rcp, lcp, dial_min, dial_max),
 
                 "iso_test": "isolate_wheel_2",
                 "iso_test_id": iso_test_id,
@@ -2206,7 +2226,7 @@ def isolate_wheel_2(session: Session) -> None:
 
             "left_contact": lcp,
             "right_contact": rcp,
-            "contact_width": rcp - lcp,
+            "contact_width": _circular_distance(rcp, lcp, dial_min, dial_max),
 
             "iso_test": "isolate_wheel_2",
             "iso_test_id": iso_test_id,
@@ -2245,7 +2265,7 @@ def exhaustive_enumeration_all(session: Session) -> None:
     lc = session["lock_config"]
     wd = lc["wheel_data"]
 
-    # 1️⃣ Build candidates FIRST
+    # Build candidates FIRST
     candidates = {}
     for w in range(1, lc["wheels"] + 1):
         gates = _effective_gate_list(wd[str(w)])
@@ -2254,7 +2274,7 @@ def exhaustive_enumeration_all(session: Session) -> None:
             return
         candidates[w] = list(gates)
 
-    # 2️⃣ Build full combination list AFTER candidates exist
+    # Build full combination list AFTER candidates exist
     all_combos = list(product(
         candidates[1],
         candidates[2],

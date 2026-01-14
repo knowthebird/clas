@@ -8,7 +8,7 @@
     "dial_max": 99.0,
     "tolerance": 1.0,
     "turn_sequence": "LRL",
-    "flies": "fixed",
+    "flies": "moveable",
     "notes": "",
     "awr_low_point": null,
     "awl_low_point": null,
