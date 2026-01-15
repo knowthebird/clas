@@ -1,35 +1,62 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
+#
+# Combination Lock Analysis Suite (CLAS)
+#
+# An open-source utility for recording, visualizing, and analyzing mechanical
+# combination lock measurements for educational and locksport purposes.
+#
+# Copyright (C) 2026 knowthebird
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, version 3 only.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# USE POLICY:
+# This software is intended ONLY for:
+#   - Educational use
+#   - Locksport
+#   - Locksmith training
+#   - Locks that you own or have explicit permission to work on
+#
+# Misuse of this software may violate local, state, or federal law.
+# The authors and contributors accept no liability for misuse.
+#
+# Module: clas_core.py
+# Purpose: Core engine (portable, UI-agnostic state machine).
+#
+# This file contains the “business logic” of CLAS and MUST remain portable.
+# Any CLI/web specific behavior (printing, file paths, backups, web requests) belongs in an adapter.
+
 """
-clas_core.py - Core engine (portable, no I/O)
+CLAS Core Engine
 
-This module is intentionally UI-agnostic:
-- No print(), input(), filesystem access, or OS-specific behavior.
-- The engine exposes a "prompt -> action -> prompt" contract usable by both
-  a CLI adapter and a future web adapter.
+This module implements the UI-agnostic “prompt → action → prompt” engine used by CLAS.
 
-Session format (single JSON file, persisted by adapter):
+Design goals:
+- No direct I/O: no terminal printing, no interactive input, and no filesystem writes.
+- Deterministic replay: the session records all user actions, and the engine can rebuild state
+  by replaying history (enabling unlimited undo and crash-safe recovery when paired with an adapter).
+- Adapter-friendly: a CLI adapter or a web adapter can drive the same workflows by calling:
+    - get_prompt(session)  → dict describing what to show
+    - apply_action(session, action) → updated session dict
 
-{
-  "version": 1,
-  "meta": {"session_name": "..."},
-  "state": {"lock_config": {...}, "measurements": [...], "metadata": {...}},
-  "runtime": {"stack": [{"screen": "...", "ctx": {...}}, ...]},
-  "history": [{"type": "input"|"command", "prompt_id": "...", "text": "..."/"name": "..."}],
-  "cursor": <int>
-}
-
-Undo model:
-- cursor points to how many history events are applied.
-- Undo decrements cursor and rebuild() recomputes state/runtime deterministically
-  by replaying history[:cursor].
-
-Reserved commands are enforced at the adapter layer:
-q = quit (adapter-only)
-s = save (adapter-only)
-u = undo (calls core as command "undo")
-e = exit (calls core as command "exit")
+Navigation guide (search for these headers / functions):
+  - Session schema and normalization (new_session, normalize_session)
+  - Prompt generation (get_prompt, _prompt_*)
+  - Action application and replay (apply_action, rebuild, _apply_event)
+  - Core utilities (dial math, distances, parsing helpers)
+  - Workflows / tests (AWL/AWR, wheel isolation, enumeration, etc.)
 """
+
 
 from __future__ import annotations
 
