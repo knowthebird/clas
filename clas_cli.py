@@ -70,89 +70,338 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+
 def _plot_output_path(session_path: Path, kind: str, ident: int) -> Path:
     # Save plots next to the session file (per project convention).
     base = session_path.stem
+    if kind == "sweep":
+        return session_path.parent / f"{base}_sweep_{int(ident)}.png"
+    if kind == "highlow":
+        return session_path.parent / f"{base}_high_low_test_{int(ident)}.png"
     return session_path.parent / f"{base}-{kind}-{int(ident)}.png"
 
 
-def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_path: Path) -> None:
-    # Lazy import so CLI still works in minimal environments.
+def _unwrap_series(vals, dial_min: float = 0.0, dial_max: float = 99.0, anchor=None):
+    """Unwrap circular dial values so they plot continuously around an anchor."""
+    try:
+        n = float(dial_max - dial_min + 1)
+        if n <= 0:
+            n = 100.0
+    except Exception:
+        n = 100.0
+
+    if vals is None or len(vals) == 0:
+        return vals, 100
+
+    if anchor is None:
+        anchor = float(vals[0])
+
+    out = []
+    for v in vals:
+        try:
+            v = float(v)
+            delta = v - anchor
+            delta_wrapped = ((delta + n / 2.0) % n) - n / 2.0
+            out.append(anchor + delta_wrapped)
+        except Exception:
+            out.append(v)
+    return out, int(round(n))
+
+
+def _format_dial_tick(y: float, n: int, dial_min: float = 0.0) -> str:
+    try:
+        v = (float(y) - dial_min) % n + dial_min
+        return f"{v:.1f}"
+    except Exception:
+        return str(y)
+
+
+def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_path: Path, session_name: str = "") -> None:
+    # Headless / CLI-safe plotting.
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter
+    import numpy as np
 
-    x_field = f"combination_wheel_{int(wheel_swept)}"
-    if not any(x_field in m for m in measurements):
-        for f in ("combination_wheel_3", "combination_wheel_2", "combination_wheel_1"):
-            if any(f in m for m in measurements):
-                x_field = f
-                break
-
-    pts = []
-    for m in measurements:
-        try:
-            x = float(m.get(x_field))
-            l = float(m.get("left_contact"))
-            r = float(m.get("right_contact"))
-            pts.append((x, l, r))
-        except Exception:
-            continue
-    pts.sort(key=lambda t: t[0])
-    if not pts:
+    if not measurements:
         return
 
-    xs = [p[0] for p in pts]
-    lcp = [p[1] for p in pts]
-    rcp = [p[2] for p in pts]
+    wheel = int(wheel_swept or measurements[0].get("wheel_swept", 0) or 0) or 1
+    wheel_key = f"combination_wheel_{wheel}"
 
-    fig = plt.figure()
-    plt.plot(xs, lcp, marker="o", linestyle="-", label="LCP")
-    plt.plot(xs, rcp, marker="o", linestyle="-", label="RCP")
-    plt.title(f"Sweep {int(sweep_id)} (Wheel {int(wheel_swept)} swept)")
-    plt.xlabel(x_field)
-    plt.ylabel("Contact point")
-    plt.legend()
+    # Extract arrays
+    x = []
+    lcp = []
+    rcp = []
+    for m in measurements:
+        try:
+            x.append(float(m.get(wheel_key)))
+            lcp.append(float(m.get("left_contact")))
+            rcp.append(float(m.get("right_contact")))
+        except Exception:
+            continue
+
+    if not x:
+        return
+
+    width = []
+    for m in measurements:
+        try:
+            width.append(float(m.get("contact_width", float(m.get("right_contact")) - float(m.get("left_contact")))))
+        except Exception:
+            width.append(0.0)
+
+    data = sorted(zip(x, lcp, rcp, width), key=lambda t: t[0])
+    x, lcp, rcp, width = map(np.array, zip(*data))
+    # Unwrap circular contact points so plots don't jump across 0/99.
+    dial_min = 0.0
+    dial_max = 99.0
+    try:
+        lc = measurements[0].get("lock_config", {})
+        if isinstance(lc, dict):
+            dial_min = float(lc.get("dial_min", dial_min))
+            dial_max = float(lc.get("dial_max", dial_max))
+    except Exception:
+        pass
+
+    lcp_unwrapped, n_dial = _unwrap_series(list(lcp), dial_min=dial_min, dial_max=dial_max, anchor=float(lcp[0]))
+    rcp_unwrapped, _ = _unwrap_series(list(rcp), dial_min=dial_min, dial_max=dial_max, anchor=float(rcp[0]))
+    lcp = np.array(lcp_unwrapped, dtype=float)
+    rcp = np.array(rcp_unwrapped, dtype=float)
+
+
+    min_rcp_idx = int(np.argmin(rcp))
+    min_width_idx = int(np.argmin(width))
+    max_lcp_idx = int(np.argmax(lcp))
+
+    def detect_gates(x_arr, width_arr):
+        gates = []
+        for i in range(1, len(width_arr) - 1):
+            if width_arr[i] < width_arr[i - 1] and width_arr[i] < width_arr[i + 1]:
+                depth = ((width_arr[i - 1] + width_arr[i + 1]) / 2.0) - width_arr[i]
+                if depth > 0.3:
+                    gates.append((x_arr[i], width_arr[i], depth))
+        return gates
+
+    gates = detect_gates(x, width)
+
+    fig, (ax_top, ax_mid, ax_bot) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+
+    ax_top.plot(x, rcp, marker="o")
+    ax_top.scatter(x, rcp, marker="x")
+    ax_top.scatter(x[min_rcp_idx], rcp[min_rcp_idx], color="red", s=120)
+    ax_top.set_ylabel("Right Contact")
+    ax_top.grid(True, which="major", linestyle="--", alpha=0.6)
+    ax_top.minorticks_on()
+    ax_top.grid(True, which="minor", linestyle=":", alpha=0.3)
+    ax_top.yaxis.set_major_formatter(FuncFormatter(lambda y, _: _format_dial_tick(y, n_dial, dial_min)))
+
+    ax_mid.plot(x, lcp, marker="o")
+    ax_mid.scatter(x, lcp, marker="x")
+    ax_mid.scatter(x[max_lcp_idx], lcp[max_lcp_idx], color="red", s=120)
+    ax_mid.set_ylabel("Left Contact")
+    ax_mid.grid(True, which="major", linestyle="--", alpha=0.6)
+    ax_mid.minorticks_on()
+    ax_mid.grid(True, which="minor", linestyle=":", alpha=0.3)
+    ax_mid.yaxis.set_major_formatter(FuncFormatter(lambda y, _: _format_dial_tick(y, n_dial, dial_min)))
+
+    # Set y-limits to a tight window around the data for readability (avoids tiny-looking changes).
+    try:
+        pad = max(1.0, 0.05 * float(max(rcp) - min(rcp)))
+        ax_top.set_ylim(float(min(rcp)) - pad, float(max(rcp)) + pad)
+    except Exception:
+        pass
+    try:
+        pad = max(1.0, 0.05 * float(max(lcp) - min(lcp)))
+        ax_mid.set_ylim(float(min(lcp)) - pad, float(max(lcp)) + pad)
+    except Exception:
+        pass
+
+    ax_bot.plot(x, width, marker="o")
+    ax_bot.scatter(x, width, marker="x")
+    ax_bot.scatter(x[min_width_idx], width[min_width_idx], color="red", s=120)
+    for gx, gw, strength in gates:
+        ax_bot.scatter(gx, gw, color="gold", s=160, marker="*", zorder=5)
+
+    ax_bot.set_ylabel("Contact Width")
+    ax_bot.set_xlabel("Dial Position")
+    ax_bot.grid(True, which="major", linestyle="--", alpha=0.6)
+    ax_bot.minorticks_on()
+    ax_bot.grid(True, which="minor", linestyle=":", alpha=0.3)
+    ax_bot.yaxis.set_major_formatter(FuncFormatter(lambda y, _: _format_dial_tick(y, n_dial, dial_min)))
+    try:
+        ax_bot.set_ylim(0, float(max(width)) * 1.1 if len(width) else 1)
+    except Exception:
+        pass
+
+    # Adaptive x ticks
+    xmin = float(np.min(x))
+    xmax = float(np.max(x))
+    span = xmax - xmin
+    if span <= 20:
+        major_step = 1
+    elif span <= 50:
+        major_step = 2
+    else:
+        major_step = 5
+
+    major_ticks = np.arange(np.floor(xmin), np.ceil(xmax) + 1, major_step)
+    minor_ticks = np.arange(np.floor(xmin), np.ceil(xmax) + 0.5, major_step / 5.0)
+    ax_bot.set_xticks(major_ticks)
+    ax_bot.set_xticks(minor_ticks, minor=True)
+
+    for label in ax_bot.get_xticklabels():
+        label.set_rotation(30)
+        label.set_ha("right")
+
+    # Combination label from first row if present
+    combo = []
+    for i in (1, 2, 3):
+        k = f"combination_wheel_{i}"
+        if k in measurements[0]:
+            combo.append(measurements[0].get(k))
+    title_session = session_name or ""
+    fig.suptitle(
+        f"Session: {title_session} | Sweep: {int(sweep_id)}\n"
+        f"Wheel swept: {wheel}   |   Combination: {combo}",
+        fontsize=12
+    )
+
+    plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.savefig(out_path)
     plt.close(fig)
 
 
-def _plot_high_low_png(measurements: list, test_id: int, out_path: Path) -> None:
+def _plot_high_low_png(measurements: list, test_id: int, out_path: Path, session_name: str = "") -> None:
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    
+    import numpy as np
 
-    pts = []
-    for m in measurements:
-        try:
-            if int(float(m.get("high_low_test"))) != int(test_id):
-                continue
-            x = float(m.get("hw_gate"))
-            l = float(m.get("left_contact"))
-            r = float(m.get("right_contact"))
-            pts.append((x, l, r))
-        except Exception:
-            continue
-    pts.sort(key=lambda t: t[0])
-    if not pts:
+    data = [m for m in measurements if str(m.get("high_low_test", "")) == str(test_id)]
+    if not data:
         return
 
-    xs = [p[0] for p in pts]
-    lcp = [p[1] for p in pts]
-    rcp = [p[2] for p in pts]
+    high = [m for m in data if str(m.get("hw_type", "")).strip().lower() == "high"]
+    low = [m for m in data if str(m.get("hw_type", "")).strip().lower() == "low"]
 
-    fig = plt.figure()
-    plt.plot(xs, lcp, marker="o", linestyle="-", label="LCP")
-    plt.plot(xs, rcp, marker="o", linestyle="-", label="RCP")
-    plt.title(f"High Low Test {int(test_id)}")
-    plt.xlabel("Gate position")
-    plt.ylabel("Contact point")
-    plt.legend()
+    def combo_label(m):
+        c1 = m.get("combination_wheel_1", "")
+        c2 = m.get("combination_wheel_2", "")
+        c3 = m.get("combination_wheel_3", "")
+        return f"{c1}, {c2}, {c3}"
+
+    def extract(meas):
+        if not meas:
+            return np.array([]), np.array([]), np.array([]), np.array([]), []
+        l_raw = [float(m["left_contact"]) for m in meas]
+        r_raw = [float(m["right_contact"]) for m in meas]
+
+        dial_min = 0.0
+        dial_max = 99.0
+        try:
+            lc = meas[0].get("lock_config", {})
+            if isinstance(lc, dict):
+                dial_min = float(lc.get("dial_min", dial_min))
+                dial_max = float(lc.get("dial_max", dial_max))
+        except Exception:
+            pass
+
+        l_unwrapped, n_dial = _unwrap_series(l_raw, dial_min=dial_min, dial_max=dial_max, anchor=float(l_raw[0]) if l_raw else None)
+        r_unwrapped, _ = _unwrap_series(r_raw, dial_min=dial_min, dial_max=dial_max, anchor=float(r_raw[0]) if r_raw else None)
+
+        l = np.array(l_unwrapped, dtype=float)
+        r = np.array(r_unwrapped, dtype=float)
+        w = np.array([float(m.get("contact_width", float(m["right_contact"]) - float(m["left_contact"]))) for m in meas], dtype=float)
+        x = np.arange(1, len(meas) + 1, dtype=int)
+        labels = [combo_label(m) for m in meas]
+        return x, l, r, w, labels
+
+    def unique_extreme_index(values: np.ndarray, mode: str):
+        if values is None or len(values) < 2:
+            return None
+        if mode == "max":
+            vmax = np.max(values)
+            idxs = np.where(values == vmax)[0]
+            return int(idxs[0]) if len(idxs) == 1 else None
+        if mode == "min":
+            vmin = np.min(values)
+            idxs = np.where(values == vmin)[0]
+            return int(idxs[0]) if len(idxs) == 1 else None
+        return None
+
+    def draw(ax, x, y, ylabel):
+        if len(x) == 0:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        else:
+            ax.plot(x, y, marker="o")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, which="major", linestyle="--", alpha=0.6)
+        ax.minorticks_on()
+        ax.grid(True, which="minor", linestyle=":", alpha=0.3)
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda yy, _: _format_dial_tick(yy, n_dial, dial_min)))
+
+    def apply_combo_ticks(ax, x, labels):
+        if len(x) == 0:
+            return
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=0)
+        ax.set_xlabel("Combination Tried (W1, W2, W3)")
+
+    def highlight_if_unique(ax, x, y, mode: str):
+        idx = unique_extreme_index(y, mode)
+        if idx is None:
+            return
+        ax.scatter([x[idx]], [y[idx]], color="red", s=140, zorder=5)
+
+    xh, lh, rh, wh, lab_h = extract(high)
+    xl, ll, rl, wl, lab_l = extract(low)
+
+    fig, axes = plt.subplots(3, 2, figsize=(14, 10), sharex=False)
+
+    draw(axes[0, 0], xh, rh, "RCP (+)")
+    draw(axes[0, 1], xl, rl, "RCP (−)")
+    if len(xh) > 0:
+        highlight_if_unique(axes[0, 0], xh, rh, mode="max")
+    if len(xl) > 0:
+        highlight_if_unique(axes[0, 1], xl, rl, mode="max")
+    apply_combo_ticks(axes[0, 0], xh, lab_h)
+    apply_combo_ticks(axes[0, 1], xl, lab_l)
+
+    draw(axes[1, 0], xh, lh, "LCP (+)")
+    draw(axes[1, 1], xl, ll, "LCP (−)")
+    if len(xh) > 0:
+        highlight_if_unique(axes[1, 0], xh, lh, mode="min")
+    if len(xl) > 0:
+        highlight_if_unique(axes[1, 1], xl, ll, mode="min")
+    apply_combo_ticks(axes[1, 0], xh, lab_h)
+    apply_combo_ticks(axes[1, 1], xl, lab_l)
+
+    draw(axes[2, 0], xh, wh, "Width (+)")
+    draw(axes[2, 1], xl, wl, "Width (−)")
+    if len(xh) > 0:
+        highlight_if_unique(axes[2, 0], xh, wh, mode="max")
+    if len(xl) > 0:
+        highlight_if_unique(axes[2, 1], xl, wl, mode="max")
+    apply_combo_ticks(axes[2, 0], xh, lab_h)
+    apply_combo_ticks(axes[2, 1], xl, lab_l)
+
+    gate = data[0].get("hw_gate", "")
+    inc = data[0].get("hw_increment", "")
+
+    fig.suptitle(
+        f"Session: {session_name}   High-Wheel Test {int(test_id)}\n"
+        f"Gate = {gate}   Increment = ±{inc}",
+        fontsize=12
+    )
+
+    plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.savefig(out_path)
     plt.close(fig)
-
 
 def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
     """Save graphs at key points (scan complete / plot screens)."""
@@ -166,7 +415,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
             wheel_swept = int(ctx.get("wheel_swept", 0) or 0)
             rows = ctx.get("rows", []) or []
             out_path = _plot_output_path(session_path, "sweep", sweep_id)
-            _plot_sweep_png(rows, wheel_swept, sweep_id, out_path)
+            _plot_sweep_png(rows, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
             return
 
         if pid in ("iso2.finish", "iso3.finish", "plot_sweep.generate"):
@@ -177,13 +426,13 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
                 if str(m.get("sweep", "")).replace(".", "", 1).isdigit() and int(float(m.get("sweep"))) == sweep_id
             ]
             out_path = _plot_output_path(session_path, "sweep", sweep_id)
-            _plot_sweep_png(ms, wheel_swept, sweep_id, out_path)
+            _plot_sweep_png(ms, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
             return
 
         if pid == "plot_high_low.generate":
             test_id = int(ctx.get("test_id"))
             out_path = _plot_output_path(session_path, "highlow", test_id)
-            _plot_high_low_png(data["state"]["measurements"], test_id, out_path)
+            _plot_high_low_png(data["state"]["measurements"], test_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
             return
     except Exception:
         return
@@ -358,15 +607,15 @@ def _interpret_global_commands(raw: str, prompt_kind: str) -> Optional[Dict[str,
     r = raw.strip()
 
     # allow literal command letters for text prompts via escaping
-    if prompt_kind == "text" and r.startswith("\\") and len(r) == 2 and r[1] in ("q","s","u","e"):
+    if prompt_kind == "text" and r.startswith("\\") and len(r) == 2 and r[1] in ("q","s","u","a"):
         return None  # treat as normal input; caller will strip backslash
 
     # commands (single letter or word)
     low = r.lower()
     if low in ("u", "undo"):
         return {"type":"command","name":"undo"}
-    if low in ("e", "exit"):
-        return {"type":"command","name":"exit"}
+    if low in ("a", "abort"):
+        return {"type":"command","name":"abort"}
     # save/quit handled separately
     return None
 

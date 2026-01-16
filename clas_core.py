@@ -68,7 +68,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.0"
+CLAS_CORE_VERSION = "0.2.1"
 
 # -----------------------
 # Lock config helpers
@@ -188,6 +188,23 @@ def normalize_lock_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 cfg[k] = None
 
     return cfg
+
+
+def _format_wheel_data(lock_config: Dict[str, Any]) -> str:
+    """Human-readable per-wheel gates for config display."""
+    try:
+        wheels = int(lock_config.get("wheels", 0) or 0)
+    except Exception:
+        wheels = 0
+    wd = lock_config.get("wheel_data", {}) or {}
+    lines = []
+    for w in range(1, max(0, wheels) + 1):
+        wdata = wd.get(str(w), {}) or {}
+        kg = wdata.get("known_gates", []) or []
+        sg = wdata.get("suspected_gates", []) or []
+        fg = wdata.get("false_gates", []) or []
+        lines.append(f"    wheel {w}: known={kg} suspected={sg} false={fg}")
+    return "\n".join(lines) if lines else "    (none)"
 
 
 
@@ -406,7 +423,7 @@ def get_prompt(session: Session) -> PromptSpec:
     ctx = frame["ctx"]
 
     # universal hint (adapters can choose to show elsewhere)
-    hint = "Commands: u=undo, s=save, e=exit, q=quit"
+    hint = "Commands: s=save, u=undo, a=abort, q=quit"
 
     if screen == "main_menu":
         return {
@@ -416,10 +433,10 @@ def get_prompt(session: Session) -> PromptSpec:
             "choices": [
                 {"key": "1", "label": "Configure lock"},
                 {"key": "2", "label": "Tests"},
-                {"key": "3", "label": "Tutorial"},
-                {"key": "4", "label": "About"},
-                {"key": "5", "label": "Resources"},
-                {"key": "6", "label": "Analyze / Plot (save graphs)"},
+                {"key": "3", "label": "Analyze / Plot"},
+                {"key": "4", "label": "Tutorial"},
+                {"key": "5", "label": "About"},
+                {"key": "6", "label": "Resources"},
             ],
             "help": hint,
         }
@@ -554,11 +571,11 @@ Press Enter to return.""",
 def apply_action(session: Session, action: Action) -> Session:
     """
     Apply a single action. The adapter is responsible for interpreting global commands
-    (q/s/u/e). For u and e, pass command actions into core.
+    (q/s/u/a). For u and e, pass command actions into core.
 
     action formats:
       {"type":"input","text":"..."}
-      {"type":"command","name":"exit"|"undo"}
+      {"type":"command","name":"abort"|"undo"}
     """
     session = normalize_session(session)
 
@@ -578,8 +595,8 @@ def apply_action(session: Session, action: Action) -> Session:
 
     if at == "command":
         name = str(action.get("name", "")).strip().lower()
-        if name == "exit":
-            event = {"type": "command", "name": "exit", "prompt_id": prompt_id}
+        if name == "abort":
+            event = {"type": "command", "name": "abort", "prompt_id": prompt_id}
             session["history"].append(event)
             session["cursor"] += 1
             _apply_event(session, event)
@@ -646,7 +663,7 @@ def _apply_event(session: Session, ev: Dict[str, Any]) -> None:
     session.clear()
     session.update(norm)
 
-    if ev.get("type") == "command" and ev.get("name") == "exit":
+    if ev.get("type") == "command" and ev.get("name") in ("abort"):
         _pop(session)
         return
 
@@ -718,8 +735,8 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
         return True, None
 
     if screen == "tutorial":
-        _pop(session)
-        return True, None
+        return _apply_tutorial(session, ctx, parsed, prompt)
+
 
     if screen == "tests_menu":
         return _apply_tests_menu(session, ctx, parsed)
@@ -771,16 +788,16 @@ def _apply_main_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tupl
         _push(session, "tests_menu", {})
         return True, None
     if choice == "3":
-        _push(session, "tutorial", {})
+        _push(session, "analyze_menu", {})
         return True, None
     if choice == "4":
-        _push(session, "about", {})
+        _push(session, "tutorial", {})
         return True, None
     if choice == "5":
-        _push(session, "resources", {})
+        _push(session, "about", {})
         return True, None
     if choice == "6":
-        _push(session, "analyze_menu", {})
+        _push(session, "resources", {})
         return True, None
 
     return False, "Invalid choice."
@@ -836,7 +853,8 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             f"  make={lc.get('make','UNKNOWN')}  fence={lc.get('fence_type','UNKNOWN')}  ul={lc.get('ul','UNKNOWN')}\n"
             f"  oval_wheels={lc.get('oval_wheels','UNKNOWN')}\n"
             f"  awr_low_point={lc.get('awr_low_point')}  awl_low_point={lc.get('awl_low_point')}\n"
-            f"  approx_lcp_location={lc.get('approx_lcp_location')}  approx_rcp_location={lc.get('approx_rcp_location')}\n\n"
+            f"  approx_lcp_location={lc.get('approx_lcp_location')}  approx_rcp_location={lc.get('approx_rcp_location')}\n"
+            f"  wheel_data (gates):\n{_format_wheel_data(lc)}\n\n"
             "Edit configuration?\n"
             "  1) Yes\n"
             "  2) No (return)\n"
@@ -984,23 +1002,8 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         default = "" if cur is None else float(cur)
         return {"id":"config.approx_rcp_location","kind":"text","text":"Approx RCP location (number; '-' to clear; Enter to keep)", "default": default}
 
-    if step == 15:
-        return {
-            "id":"config.edit_gates",
-            "kind":"choice",
-            "text":"Edit per-wheel gate lists?\n  1) Yes\n  2) No\n",
-            "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}],
-        }
 
     # Gate editing loop: wheel index in ctx["gate_w"]
-    if step == 16:
-        w = int(ctx.get("gate_w", 1) or 1)
-        wheels = int(work.get("wheels", lc["wheels"]))
-        if w > wheels:
-            # done
-            return {"id":"config.finish","kind":"confirm","text":"Configuration updated. Press Enter to return."}
-        ctx["gate_w"] = w
-        return {"id":"config.gates.header","kind":"confirm","text":f"Wheel {w}/{wheels} gates. Press Enter to edit."}
     if step == 17:
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {}).get(str(w), {})
@@ -1013,11 +1016,9 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {}).get(str(w), {})
         return {"id":"config.gates.false","kind":"csv_floats","text":f"Wheel {w} FALSE gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(str(x) for x in wd.get("false_gates", []))}
-    if step == 20:
-        return {"id":"config.gates.next","kind":"confirm","text":"Press Enter to continue to next wheel."}
 
-    # Finish
-    return {"id":"config.finish","kind":"confirm","text":"Configuration updated. Press Enter to return."}
+    # Safety fallback (should not happen)
+    return {"id":"config.invalid","kind":"message","text":"[Error] Invalid configuration step."}
 
 
 def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
@@ -1122,22 +1123,15 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
         ok, err = _apply_optional_float("approx_rcp_location")
         if not ok:
             return False, err
-        ctx["step"] = 15
+        ctx["gate_w"] = 1
+        ctx["gate_kind"] = "known_gates"
+        ctx["step"] = 17
         return True, None
 
-    if step == 15:
-        if parsed == "2":
-            # finish apply config
-            session["state"]["lock_config"] = normalize_lock_config(work)
-            _pop(session)
-            return True, None
         ctx["step"] = 16
         ctx["gate_w"] = 1
         return True, None
 
-    if step == 16:
-        ctx["step"] = 17
-        return True, None
 
     if step == 17:
         w = int(ctx.get("gate_w", 1) or 1)
@@ -1163,27 +1157,43 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
         return True, None
 
     if step == 19:
-        w = int(ctx.get("gate_w", 1) or 1)
-        wd = normalize_lock_config(work).get("wheel_data", {})
-        cur = wd.get(str(w), {})
-        if parsed != []:
-            cur["false_gates"] = parsed
-        wd[str(w)] = cur
-        work["wheel_data"] = wd
-        ctx["step"] = 20
-        return True, None
+            # set false_gates
+            w = int(ctx.get("gate_w", 1) or 1)
+            wd = work.setdefault("wheel_data", {})
+            wdata = wd.setdefault(str(w), {})
+            parsed_list = parsed if isinstance(parsed, list) else ([] if parsed in (None, "") else [parsed])
+            wdata["false_gates"] = parsed_list
+            wd[str(w)] = wdata
+            work["wheel_data"] = wd
 
-    if step == 20:
-        # next wheel or finish
-        w = int(ctx.get("gate_w", 1) or 1) + 1
-        ctx["gate_w"] = w
-        ctx["step"] = 16
-        return True, None
+            # advance to next wheel or finish immediately (no intermediate prompt/step)
+            try:
+                wheels = int(work.get("wheels", lc.get("wheels", 0)) or 0)
+            except Exception:
+                wheels = int(lc.get("wheels", 0) or 0)
 
-    # finish step
-    session["state"]["lock_config"] = normalize_lock_config(work)
-    _pop(session)
-    return True, None
+            next_w = w + 1
+            if next_w > wheels:
+                session["state"]["lock_config"] = normalize_lock_config(work)
+                session.setdefault("runtime", {})["notify"] = "Configuration updated."
+                _pop(session)
+                return True, None
+
+            ctx["gate_w"] = next_w
+            ctx["gate_kind"] = "known_gates"
+            ctx["step"] = 17
+            return True, None
+
+
+            ctx["gate_w"] = w
+            ctx["gate_kind"] = "known_gates"
+            ctx["step"] = 17
+            return True, None
+            ctx["gate_w"] = w
+            ctx["gate_kind"] = "known_gates"
+            ctx["step"] = 17
+            return True, None
+
 
 
 # -----------------------
@@ -2451,7 +2461,7 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         return {
             "id": "tutorial.post",
             "kind": "confirm",
-            "text": "Press Enter to continue, or type E to exit tutorial.",
+            "text": "Press Enter to continue, or type A to abort tutorial.",
         }
 
     text = (
@@ -2459,7 +2469,7 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         + "\n".join(lines)
         + "\n\nSuggested action:\n  → "
         + label
-        + "\n\nPress Enter to continue, or type E to exit tutorial."
+        + "\n\nPress Enter to continue, or type A to abort tutorial."
     )
     return {"id": "tutorial.show", "kind": "confirm", "text": text}
 

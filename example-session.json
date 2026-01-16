@@ -1,7 +1,8 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "meta": {
-    "session_name": "example-session"
+    "session_name": "example-session",
+    "last_saved_cursor": 25
   },
   "state": {
     "lock_config": {
@@ -131,9 +132,49 @@
     },
     {
       "type": "input",
-      "text": "2",
-      "prompt_id": "config.edit_gates"
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
     }
   ],
-  "cursor": 17
+  "cursor": 25
 }
