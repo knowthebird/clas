@@ -433,7 +433,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
     try:
         if ctx.pop("_skip_plot_once", False):
             return
-        if pid in ("iso2.candidates", "iso3.candidates", "iso3.plot", "iso3.post_refine.plot"):
+        if pid in ("iso2.candidates", "iso2.plot", "iso2.post_refine.plot", "iso3.candidates", "iso3.plot", "iso3.post_refine.plot"):
             sweep_id = int(ctx.get("sweep_id"))
             wheel_swept = int(ctx.get("wheel_swept", 0) or 0)
             rows = ctx.get("rows", []) or ctx.get("scan_rows", []) or []
@@ -447,7 +447,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
             return
 
         if pid in ("iso2.finish", "iso3.finish", "plot_sweep.generate"):
-            if pid == "iso3.finish" and ctx.pop("_skip_finish_plot_once", False):
+            if pid in ("iso2.finish", "iso3.finish") and ctx.pop("_skip_finish_plot_once", False):
                 return
             sweep_id = int(ctx.get("sweep_id"))
             wheel_swept = int(ctx.get("wheel_swept", 0) or 0)

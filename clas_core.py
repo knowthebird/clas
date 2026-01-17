@@ -1393,6 +1393,9 @@ def _prompt_find_awl(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         return {"id":"awl.unsupported","kind":"confirm","text":"Find AWL is implemented for 3-wheel LRL locks. Press Enter to return."}
 
     dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+    w3_gate, w3_gate_src = _w3_gate_info(lc)
+    ctx["w3_gate"] = w3_gate
+    ctx["w3_gate_src"] = w3_gate_src
 
     if ctx.get("n_points") is None:
         ctx["step"] = "ask_points"
@@ -1412,22 +1415,56 @@ def _prompt_find_awl(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
 
     if step == "intro":
         cps = "\n".join([f"  {i+1:>2}) {_fmt_float(c)}" for i,c in enumerate(checkpoints)])
-        return {"id":"awl.intro","kind":"confirm","text":f"Find AWL Low Point\nCheckpoints:\n{cps}\n\nTurn dial left (CCW) until you pass 0 three times, and stop on 0 when you reach it the fourth time.\nPress Enter to start."}
+        return {"id":"awl.intro","kind":"confirm","text":f"Find AWL Low Point\nCheckpoints:\n{cps}\n\nPress Enter to start."}
 
     idx = int(ctx.get("idx",0) or 0)
     if idx < len(checkpoints):
         cp = checkpoints[idx]
-        return {"id":"awl.lcp","kind":"float","text":f"Checkpoint {idx+1}/{len(checkpoints)}:\nTurn dial left (CCW) to {_fmt_float(cp)}\nThen turn dial right (CW) until you reach the RCP. Enter RCP"}
+        if step == "to_checkpoint":
+            if idx == 0:
+                text = (
+                    f"Checkpoint {idx+1}/{len(checkpoints)}:\n"
+                    "Turn dial left (CCW) until you pass 0 two times, and stop on 0 when you reach it the third time.\n"
+                    f"Continue turning left (CCW) to {_fmt_float(cp)}.\n"
+                    "Press Enter when you are on the checkpoint."
+                )
+            else:
+                text = (
+                    f"Checkpoint {idx+1}/{len(checkpoints)}:\n"
+                    f"Continue turning left (CCW) to {_fmt_float(cp)}.\n"
+                    "Press Enter when you are on the checkpoint."
+                )
+            return {"id":"awl.to_cp","kind":"confirm","text": text}
+        if step == "gate":
+            if w3_gate is not None:
+                return {"id":"awl.gate","kind":"confirm","text":f"Turn right (CW), passing {_fmt_float(cp)} one time, and stop on the value for gate 3 ({w3_gate_src}: {_fmt_float(w3_gate)}).\nPress Enter when you are on the gate."}
+            ctx["step"] = "rcp"
+            step = "rcp"
+        if step == "rcp":
+            return {"id":"awl.rcp","kind":"float","text":"Turn left (CCW) until you hit the RCP. Enter RCP"}
+        if step == "lcp":
+            return {"id":"awl.lcp","kind":"float","text":"Turn right (CW) until you hit the LCP. Enter LCP"}
+        if step == "next":
+            next_cp = checkpoints[idx + 1]
+            if w3_gate is not None:
+                text = f"Turn left (CCW), passing {_fmt_float(w3_gate)} one time, to {_fmt_float(next_cp)}.\nPress Enter when you are on the next checkpoint."
+            else:
+                text = f"Turn left (CCW) to {_fmt_float(next_cp)}.\nPress Enter when you are on the next checkpoint."
+            return {"id":"awl.next","kind":"confirm","text": text}
+        return {"id":"awl.rcp","kind":"float","text":"Turn left (CCW) until you hit the RCP. Enter RCP"}
     # done -> confirm save
     readings = ctx.get("readings", [])
-    best = max(readings, key=lambda d: d["lcp"]) if readings else None
+    best = min(readings, key=lambda d: d.get("contact_width", float("inf"))) if readings else None
     if best is None:
         return {"id":"awl.done","kind":"confirm","text":"No readings collected. Press Enter to return."}
-    lines = "\n".join([f"  {_fmt_float(r['checkpoint'])}: LCP={_fmt_float(r['lcp'])}" for r in readings])
+    lines = "\n".join([
+        f"  {_fmt_float(r['checkpoint'])}: LCP={_fmt_float(r['lcp'])}, RCP={_fmt_float(r.get('rcp'))}, CW={_fmt_float(r.get('contact_width'))}"
+        for r in readings
+    ])
     return {
         "id":"awl.save",
         "kind":"choice",
-        "text": f"RESULTS\n{lines}\n\nHighest LCP at checkpoint {_fmt_float(best['checkpoint'])} (LCP={_fmt_float(best['lcp'])}).\nSave as AWL low point?\n",
+        "text": f"RESULTS\n{lines}\n\nSmallest contact width at checkpoint {_fmt_float(best['checkpoint'])} (CW={_fmt_float(best.get('contact_width'))}).\nSave as AWL low point?\n",
         "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"},{"key":"3","label":"Enter manually"}],
     }
 
@@ -1464,19 +1501,52 @@ def _apply_find_awl(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         return True, None
     step = ctx.get("step","intro")
     if step == "intro":
-        ctx["step"] = "scan"
+        ctx["step"] = "to_checkpoint"
+        return True, None
+
+    if prompt.get("id") == "awl.to_cp":
+        w3_gate, _ = _w3_gate_info(session["state"]["lock_config"])
+        ctx["step"] = "gate" if w3_gate is not None else "rcp"
+        return True, None
+
+    if prompt.get("id") == "awl.gate":
+        ctx["step"] = "rcp"
+        return True, None
+
+    if prompt.get("id") == "awl.rcp":
+        try:
+            ctx["rcp"] = float(parsed)
+        except Exception:
+            return False, "Enter a numeric value."
+        ctx["step"] = "lcp"
         return True, None
 
     if prompt.get("id") == "awl.lcp":
+        try:
+            lcp_val = float(parsed)
+        except Exception:
+            return False, "Enter a numeric value."
         lc = session["state"]["lock_config"]
         dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
         checkpoints = ctx.get("checkpoints", build_checkpoints(dial_min, dial_max))
         idx = int(ctx.get("idx",0) or 0)
         cp = checkpoints[idx]
         readings = ctx.get("readings", [])
-        readings.append({"checkpoint": float(cp), "lcp": float(parsed)})
+        rcp_val = float(ctx.get("rcp")) if ctx.get("rcp") is not None else None
+        cw = circular_distance(rcp_val, lcp_val, dial_min, dial_max) if rcp_val is not None else None
+        readings.append({"checkpoint": float(cp), "lcp": lcp_val, "rcp": rcp_val, "contact_width": cw})
         ctx["readings"] = readings
-        ctx["idx"] = idx + 1
+        ctx["rcp"] = None
+        if idx + 1 < len(checkpoints):
+            ctx["step"] = "next"
+        else:
+            ctx["idx"] = idx + 1
+        return True, None
+
+    if prompt.get("id") == "awl.next":
+        ctx["idx"] = int(ctx.get("idx",0) or 0) + 1
+        w3_gate, _ = _w3_gate_info(session["state"]["lock_config"])
+        ctx["step"] = "gate" if w3_gate is not None else "rcp"
         return True, None
 
     if prompt.get("id") == "awl.save":
@@ -1487,7 +1557,7 @@ def _apply_find_awl(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
 
         if parsed == "1":
             readings = ctx.get("readings", [])
-            best = max(readings, key=lambda d: d["lcp"]) if readings else None
+            best = min(readings, key=lambda d: d.get("contact_width", float("inf"))) if readings else None
             if best:
                 lc = dict(session["state"]["lock_config"])
                 lc["awl_low_point"] = float(best["checkpoint"])
@@ -2166,6 +2236,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
             "n": 1,
             "visited": [],
             "rows": [],
+            "candidates": None,
             "offset": None,
             "step_size": step_size,
             "tol": tol,
@@ -2230,55 +2301,152 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         cycle = int(ctx.get("cycle",1) or 1)
         max_cycles = int(((dial_max - dial_min + 1) / max(step_size, 1e-9)) + 10)
         if cycle > max_cycles:
-            ctx["phase"] = "candidates"
+            ctx["phase"] = "plot_offer"
             return _prompt_isolate_wheel_2(session, ctx)
 
         offset = float(ctx["offset"]); w3 = float(ctx["wheel_3_stop"])
+        prev_offset = ctx.get("prev_offset")
+        wd = lc.get("wheel_data", {}) or {}
+        w3_suspected = (wd.get("3", {}) or {}).get("suspected_gates", []) or []
+        w3_suspected = [float(x) for x in w3_suspected if x is not None]
+        w3_suspected_label = ", ".join(_fmt_float(x) for x in w3_suspected)
         # full revolution detection
         visited = ctx.get("visited", [])
         key = round(offset, 6)
-        if key in visited and cycle >= 3:
-            ctx["phase"] = "candidates"
+        span = (dial_max - dial_min + 1.0)
+        min_cycles = int((span / max(step_size, 1e-9)) + 0.999999)
+        ctx["min_cycles"] = min_cycles
+        if key in visited and cycle >= min_cycles:
+            ctx["phase"] = "plot_offer"
             return _prompt_isolate_wheel_2(session, ctx)
         visited.append(key)
         ctx["visited"] = visited
 
-        return {"id":"iso2.scan.lcp","kind":"float",
-                "text":(
-                    f"Cycle {cycle}\n"
-                    f"Turn left (CCW) passing {_fmt_float(offset)} one time, continue until you hit {_fmt_float(w3)}, then stop.\n"
-                    f"Turn right (CW) until you hit LCP. Enter LCP"
-                )}
+        min_cycles = int(ctx.get("min_cycles", min_cycles))
+        cycle_label = f"{cycle}/{min_cycles}"
+        if cycle >= 2:
+            if w3_suspected:
+                intro = f"passing wheel 3 suspected gate ({w3_suspected_label}) one time"
+            else:
+                intro = f"passing {_fmt_float(w3)} one time"
+            continue_parts = []
+            if prev_offset is not None:
+                continue_parts.append(f"passing the last checkpoint {_fmt_float(prev_offset)} one time")
+            detail_text = "continue turning "
+            if continue_parts:
+                detail_text = f"continue turning {' and '.join(continue_parts)}, "
+            text = (
+                f"Cycle {cycle_label}\n"
+                f"Turn right (CW) {intro}, and {detail_text}until you reach {_fmt_float(offset)}, then stop.\n"
+                f"Turn left (CCW) passing {_fmt_float(offset)} one time, then stopping on {_fmt_float(w3)}.\n"
+                f"Turn right (CW) until you hit the LCP. Enter LCP"
+            )
+        else:
+            text = (
+                f"Cycle {cycle_label}\n"
+                f"Turn left (CCW) passing {_fmt_float(offset)} one time, continue until you hit {_fmt_float(w3)}, then stop.\n"
+                f"Turn right (CW) until you hit LCP. Enter LCP"
+            )
+        return {"id":"iso2.scan.lcp","kind":"float","text": text}
 
     if phase == "scan_rcp":
         cycle = int(ctx.get("cycle",1) or 1)
+        min_cycles = int(ctx.get("min_cycles", cycle))
+        cycle_label = f"{cycle}/{min_cycles}"
         return {"id":"iso2.scan.rcp","kind":"float",
-                "text":f"Cycle {cycle}\nTurn left (CCW) until you hit RCP. Enter RCP"}
+                "text":f"Cycle {cycle_label}\nTurn left (CCW) until you hit RCP. Enter RCP"}
+
+    if phase == "plot_offer":
+        sweep_id = int(ctx.get("sweep_id", 0) or 0)
+        if ctx.get("candidates") is None:
+            rows = ctx.get("rows", [])
+            scan_positions = [float(r["combination_wheel_2"]) for r in rows]
+            lcps = [float(r["left_contact"]) for r in rows]
+            rcps = [float(r["right_contact"]) for r in rows]
+            candidates = set()
+            for i in range(1, len(rows) - 1):
+                if lcps[i] > lcps[i-1] and lcps[i] > lcps[i+1]:
+                    candidates.add(scan_positions[i])
+                if rcps[i] < rcps[i-1] and rcps[i] < rcps[i+1]:
+                    candidates.add(scan_positions[i])
+            ctx["candidates"] = sorted(candidates)
+        return {
+            "id":"iso2.plot_offer",
+            "kind":"choice",
+            "text": f"Plot sweep {sweep_id} now? (You can also plot later from the main menu.)",
+            "choices": [
+                {"key":"1","label":"Yes"},
+                {"key":"2","label":"No"},
+            ],
+        }
+
+    if phase == "plot_now":
+        sweep_id = int(ctx.get("sweep_id", 0) or 0)
+        ctx["rows"] = ctx.get("rows", [])
+        ctx["wheel_swept"] = 2
+        return {
+            "id":"iso2.plot",
+            "kind":"confirm",
+            "text": f"Generating plot for sweep {sweep_id} (saved next to the session file)...",
+        }
 
     if phase == "candidates":
-        return {"id":"iso2.candidates","kind":"confirm",
-                "text":"Scan complete. Press Enter to auto-detect candidates from LCP/RCP shape."}
+        cand_default = ",".join(_fmt_float(x) for x in (ctx.get("candidates") or []))
+        return {"id":"iso2.candidates","kind":"csv_floats",
+                "text":"Enter candidate gate positions for wheel 2 (comma-separated). Empty = No Possible Gates Observed",
+                "default": cand_default}
 
-    if phase == "choose_candidates":
-        candidates = ctx.get("candidates", [])
-        if not candidates:
-            return {"id":"iso2.no_candidates","kind":"confirm",
-                    "text":"No clear candidates detected. Press Enter to return."}
-        lines = "\n".join([f"  {_fmt_float(c)}" for c in candidates])
-        return {"id":"iso2.select_candidates","kind":"csv_floats",
-                "text":f"Auto-detected candidates:\n{lines}\n\nEnter candidates to refine (comma-separated). Empty = use all.",
-                "default": ""}
+    if phase == "refine_confirm":
+        return {
+            "id":"iso2.refine.confirm",
+            "kind":"choice",
+            "text":"Refine these points?",
+            "choices": [
+                {"key":"1","label":"Yes"},
+                {"key":"2","label":"No, finish test"},
+            ],
+        }
+
+    if phase == "refine_range_start":
+        candidates = ctx.get("candidates", []) or []
+        default_start = _fmt_float(min(candidates)) if candidates else _fmt_float(dial_min)
+        return {
+            "id":"iso2.refine.range_start",
+            "kind":"float",
+            "text":"Refinement sweep range start",
+            "default": default_start,
+        }
+
+    if phase == "refine_range_end":
+        candidates = ctx.get("candidates", []) or []
+        default_end = _fmt_float(max(candidates)) if candidates else _fmt_float(dial_max)
+        return {
+            "id":"iso2.refine.range_end",
+            "kind":"float",
+            "text":"Refinement sweep range end",
+            "default": default_end,
+        }
+
+    if phase == "refine_range_points":
+        return {
+            "id":"iso2.refine.range_points",
+            "kind":"int",
+            "text":"How many refinement points?",
+            "default": "10",
+        }
 
     if phase == "refine_intro":
         rps = ctx.get("refine_points", [])
+        rstart = ctx.get("refine_range_start")
+        rend = ctx.get("refine_range_end")
         return {"id":"iso2.refine.intro","kind":"confirm",
-                "text":f"Refinement: {len(rps)} points. Press Enter to start refinement."}
+                "text":f"Refinement: {len(rps)} points from {_fmt_float(rstart)} to {_fmt_float(rend)}.\nPress Enter to start refinement."}
 
     if phase == "refine_lcp":
         rps = ctx.get("refine_points", [])
         i = int(ctx.get("ri",0) or 0)
         if i >= len(rps):
-            ctx["phase"] = "finish"
+            ctx["phase"] = "post_refine_plot_offer"
             return _prompt_isolate_wheel_2(session, ctx)
         p = float(rps[i])
         w1 = float(ctx["wheel_1_stop"]); w3 = float(ctx["wheel_3_stop"])
@@ -2297,17 +2465,55 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         return {"id":"iso2.refine.rcp","kind":"float",
                 "text":f"Refine {i+1}/{len(ctx.get('refine_points',[]))} @ Wheel 2 = {_fmt_float(p)}\nTurn left (CCW) until you hit RCP. Enter RCP"}
 
+    if phase == "post_refine_plot_offer":
+        sweep_id = int(ctx.get("sweep_id", 0) or 0)
+        return {
+            "id":"iso2.post_refine.plot_offer",
+            "kind":"choice",
+            "text": f"Plot sweep {sweep_id} now? (You can also plot later from the main menu.)",
+            "choices": [
+                {"key":"1","label":"Yes"},
+                {"key":"2","label":"No"},
+            ],
+        }
+
+    if phase == "post_refine_plot":
+        sweep_id = int(ctx.get("sweep_id", 0) or 0)
+        ctx["rows"] = [
+            m for m in session["state"]["measurements"]
+            if str(m.get("sweep", "")).replace(".", "", 1).isdigit()
+            and int(float(m.get("sweep"))) == sweep_id
+        ]
+        ctx["wheel_swept"] = 2
+        return {
+            "id":"iso2.post_refine.plot",
+            "kind":"confirm",
+            "text": f"Generating plot for sweep {sweep_id} (saved next to the session file)...",
+        }
+
+    if phase == "post_refine_candidates":
+        cand_default = ",".join(_fmt_float(x) for x in (ctx.get("candidates") or []))
+        return {"id":"iso2.post_refine.candidates","kind":"csv_floats",
+                "text":"Update candidate gate positions for wheel 2 (comma-separated). Empty = No Possible Gates Observed",
+                "default": cand_default}
+
     if phase == "finish":
         sweep_id = int(ctx.get("sweep_id"))
         return {"id":"iso2.finish","kind":"confirm",
-                "text":f"Isolate Wheel 2 complete. Sweep saved as sweep={sweep_id}.\nPress Enter to return."}
+                "text":(
+                    f"Isolate Wheel 2 complete. Sweep saved as sweep={sweep_id}.\n"
+                    "You can plot this sweep later from the main menu.\n"
+                    "High Low Tests can help confirm whether suspected gates are on Wheel 2.\n"
+                    "These tests can be long, consider saving your progress by typing s.\n\n"
+                    "Press Enter to return."
+                )}
 
     return {"id":"iso2.unknown","kind":"confirm","text":"Press Enter to return."}
 
 
 def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
     pid = prompt.get("id","")
-    if pid in ("iso2.unsupported","iso2.no_candidates","iso2.finish","iso2.unknown"):
+    if pid in ("iso2.unsupported","iso2.finish","iso2.unknown"):
         _pop(session)
         return True, None
 
@@ -2372,49 +2578,81 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         # advance offset
         n = int(ctx.get("n",1) or 1)
         next_offset = wrap_dial(w1 - (n * step_size), dial_min, dial_max)
+        ctx["prev_offset"] = offset
         ctx["offset"] = next_offset
         ctx["n"] = n + 1
         ctx["cycle"] = int(ctx.get("cycle",1) or 1) + 1
         ctx["phase"] = "scan_lcp"
         return True, None
 
-    if pid == "iso2.candidates":
-        # commit scan rows to measurements
-        session["state"]["measurements"].extend(ctx.get("rows", []))
-        # detect candidates from shape
-        rows = ctx.get("rows", [])
-        scan_positions = [float(r["combination_wheel_2"]) for r in rows]
-        lcps = [float(r["left_contact"]) for r in rows]
-        rcps = [float(r["right_contact"]) for r in rows]
-        candidates = set()
-        for i in range(1, len(rows) - 1):
-            if lcps[i] > lcps[i-1] and lcps[i] > lcps[i+1]:
-                candidates.add(scan_positions[i])
-            if rcps[i] < rcps[i-1] and rcps[i] < rcps[i+1]:
-                candidates.add(scan_positions[i])
-        ctx["candidates"] = sorted(candidates)
-        ctx["phase"] = "choose_candidates"
+    if pid == "iso2.plot_offer":
+        if str(parsed) == "1":
+            ctx["rows"] = ctx.get("rows", [])
+            ctx["wheel_swept"] = 2
+            ctx["phase"] = "plot_now"
+            return True, None
+        ctx["_skip_plot_once"] = True
+        ctx["phase"] = "candidates"
         return True, None
 
-    if pid == "iso2.select_candidates":
-        # choose candidates to refine
-        cands = ctx.get("candidates", [])
-        chosen = list(parsed) if isinstance(parsed, list) else []
-        if not chosen:
-            chosen = cands
-        dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
-        refine_points = set()
-        for c in chosen:
-            refine_points.add(wrap_dial(float(c)-1.0, dial_min, dial_max))
-            refine_points.add(wrap_dial(float(c), dial_min, dial_max))
-            refine_points.add(wrap_dial(float(c)+1.0, dial_min, dial_max))
-        measured = set(round(float(m.get("combination_wheel_2",-9999)),6)
+    if pid == "iso2.plot":
+        ctx["_skip_plot_once"] = True
+        ctx["phase"] = "candidates"
+        return True, None
+
+    if pid == "iso2.candidates":
+        candidates: List[float] = list(parsed) if isinstance(parsed, list) else []
+        # commit scan rows to measurements
+        session["state"]["measurements"].extend(ctx.get("rows", []))
+        if not candidates:
+            ctx["_skip_finish_plot_once"] = True
+            ctx["phase"] = "finish"
+            return True, None
+        ctx["candidates"] = candidates
+        wd = lc.get("wheel_data", {}) or {}
+        w2 = wd.get("2", {}) or {}
+        w2["suspected_gates"] = [float(x) for x in candidates]
+        wd["2"] = w2
+        lc["wheel_data"] = wd
+        session["state"]["lock_config"] = normalize_lock_config(lc)
+        ctx["phase"] = "refine_confirm"
+        return True, None
+
+    if pid == "iso2.refine.confirm":
+        if str(parsed) == "2":
+            ctx["_skip_finish_plot_once"] = True
+            ctx["phase"] = "finish"
+            return True, None
+        ctx["phase"] = "refine_range_start"
+        return True, None
+
+    if pid == "iso2.refine.range_start":
+        ctx["refine_range_start"] = float(parsed)
+        ctx["phase"] = "refine_range_end"
+        return True, None
+
+    if pid == "iso2.refine.range_end":
+        ctx["refine_range_end"] = float(parsed)
+        ctx["phase"] = "refine_range_points"
+        return True, None
+
+    if pid == "iso2.refine.range_points":
+        try:
+            n_points = int(parsed)
+        except Exception:
+            n_points = 0
+        if n_points < 1 or n_points > 36000:
+            return False, "Enter an integer from 1 to 36000."
+        rstart = float(ctx.get("refine_range_start", dial_min))
+        rend = float(ctx.get("refine_range_end", dial_max))
+        refine_points = _build_range_points(rstart, rend, n_points, dial_min, dial_max)
+        measured = set(round(float(m.get("combination_wheel_2", -9999)), 6)
                        for m in session["state"]["measurements"]
                        if m.get("sweep") == sweep_id and m.get("wheel_swept") == 2)
-        rps = sorted(p for p in refine_points if round(float(p),6) not in measured)
-        ctx["refine_points"] = rps
+        refine_list = [p for p in refine_points if round(float(p), 6) not in measured]
+        ctx["refine_points"] = refine_list
         ctx["ri"] = 0
-        ctx["phase"] = "refine_intro" if rps else "finish"
+        ctx["phase"] = "refine_intro" if refine_list else "finish"
         return True, None
 
     if pid == "iso2.refine.intro":
@@ -2453,7 +2691,41 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
             "notes": "",
         })
         ctx["ri"] = i + 1
-        ctx["phase"] = "refine_lcp"
+        if ctx["ri"] >= len(rps):
+            ctx["phase"] = "post_refine_plot_offer"
+        else:
+            ctx["phase"] = "refine_lcp"
+        return True, None
+
+    if pid == "iso2.post_refine.plot_offer":
+        if str(parsed) == "1":
+            ctx["rows"] = ctx.get("rows", [])
+            ctx["wheel_swept"] = 2
+            ctx["phase"] = "post_refine_plot"
+            return True, None
+        ctx["_skip_plot_once"] = True
+        ctx["phase"] = "post_refine_candidates"
+        return True, None
+
+    if pid == "iso2.post_refine.plot":
+        ctx["_skip_plot_once"] = True
+        ctx["phase"] = "post_refine_candidates"
+        return True, None
+
+    if pid == "iso2.post_refine.candidates":
+        candidates: List[float] = list(parsed) if isinstance(parsed, list) else []
+        if not candidates:
+            ctx["_skip_finish_plot_once"] = True
+            ctx["phase"] = "finish"
+            return True, None
+        ctx["candidates"] = candidates
+        wd = lc.get("wheel_data", {}) or {}
+        w2 = wd.get("2", {}) or {}
+        w2["suspected_gates"] = [float(x) for x in candidates]
+        wd["2"] = w2
+        lc["wheel_data"] = wd
+        session["state"]["lock_config"] = normalize_lock_config(lc)
+        ctx["phase"] = "refine_confirm"
         return True, None
 
     if pid == "iso2.finish":
@@ -2664,6 +2936,18 @@ def _first_num(val: Any) -> Optional[float]:
         except Exception:
             return None
     return None
+
+
+def _w3_gate_info(lc: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    wd = lc.get("wheel_data", {}) or {}
+    w3 = wd.get("3", {}) or {}
+    gate = _first_num(w3.get("known_gates"))
+    if gate is not None:
+        return gate, "known gate"
+    gate = _first_num(w3.get("suspected_gates"))
+    if gate is not None:
+        return gate, "suspected gate"
+    return None, None
 
 
 def _suggest_stop_for_isolate_wheel_2(session: Session, wheel_num: int) -> Tuple[Optional[float], str]:
@@ -3173,6 +3457,8 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
         actions.append(("FIND_AWL", None, "Find the All Wheels Left (AWL) low point"))
     if 2 not in wks:
         actions.append(("ISOLATE_WHEEL_2", None, "Isolate Wheel 2"))
+    else:
+        actions.append(("HIGH_LOW", None, "High Low Test (confirm Wheel 2 gate)"))
     if len(wks) == 2:
         missing = [w for w in (1, 2, 3) if w not in wks][0]
         actions.append(("ENUM_WHEEL", missing, f"Exhaustive Enumeration for Wheel {missing}"))
