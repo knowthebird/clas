@@ -68,7 +68,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.2"
+CLAS_CORE_VERSION = "0.2.3"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -312,7 +312,7 @@ def build_checkpoints(dial_min: float, dial_max: float, n_points: int = 10) -> L
 def new_session(session_name: str = "session") -> Session:
     return {
         "version": CLAS_CORE_VERSION,
-        "meta": {"session_name": session_name},
+        "meta": {"session_name": session_name, "baseline_lock_config": default_lock_config()},
         "state": {
             "lock_config": normalize_lock_config(default_lock_config()),
             "measurements": [],
@@ -374,6 +374,12 @@ def normalize_session(session: Session) -> Session:
     FLOAT_DISPLAY_PRECISION = precision
     state["lock_config"] = normalize_lock_config(state.get("lock_config", {}))
     sess["state"] = state
+
+    if "baseline_lock_config" not in meta:
+        if not sess.get("history"):
+            meta["baseline_lock_config"] = dict(state.get("lock_config", default_lock_config()))
+        else:
+            meta["baseline_lock_config"] = default_lock_config()
 
     rt = sess.get("runtime", {})
     if not isinstance(rt, dict):
@@ -750,15 +756,31 @@ def rebuild(session: Session) -> Session:
 
     # Keep meta from existing session (other metadata, if any)
     fresh["meta"] = dict(session.get("meta", {}) or fresh["meta"])
+    baseline = fresh["meta"].get("baseline_lock_config")
+    if baseline is not None:
+        fresh["state"]["lock_config"] = normalize_lock_config(baseline)
 
-    # Replay
+    # Replay with prompt-id guard to avoid misapplying history after prompt changes.
+    applied = 0
     for i in range(cursor):
         ev = hist[i]
+        if ev.get("type") == "input":
+            prompt = get_prompt(fresh)
+            expected = str(prompt.get("id", ""))
+            recorded = str(ev.get("prompt_id", ""))
+            if recorded and expected and recorded != expected:
+                fresh.setdefault("runtime", {})["_rebuild_mismatch"] = {
+                    "at": i,
+                    "expected": expected,
+                    "recorded": recorded,
+                }
+                break
         _apply_event(fresh, ev)
+        applied = i + 1
 
     # Carry over history + cursor
     fresh["history"] = hist
-    fresh["cursor"] = cursor
+    fresh["cursor"] = applied
     return normalize_session(fresh)
 
 
@@ -971,6 +993,7 @@ def _apply_settings_clear_confirm(session: Session, ctx: Dict[str, Any], confirm
         session["cursor"] = 0
         session.setdefault("runtime", {})["_suppress_history_once"] = True
         session["runtime"]["stack"] = [{"screen": "main_menu", "ctx": {}}]
+        session.setdefault("meta", {})["baseline_lock_config"] = dict(session["state"]["lock_config"])
     else:
         _pop(session)
     return True, None
@@ -2234,6 +2257,8 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
             "sweep_id": _next_sweep_id(session),
             "iso_test_id": _next_iso_test_id(session, "isolate_wheel_2"),
             "n": 1,
+            "oi": 0,
+            "offsets": None,
             "visited": [],
             "rows": [],
             "candidates": None,
@@ -2298,33 +2323,35 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 "text":f"Turn right (CW) passing {_fmt_float(w1)} two times, continue slowly until you hit {_fmt_float(offset)}, then stop. Press Enter."}
 
     if phase == "scan_lcp":
-        cycle = int(ctx.get("cycle",1) or 1)
-        max_cycles = int(((dial_max - dial_min + 1) / max(step_size, 1e-9)) + 10)
-        if cycle > max_cycles:
-            ctx["phase"] = "plot_offer"
-            return _prompt_isolate_wheel_2(session, ctx)
-
         offset = float(ctx["offset"]); w3 = float(ctx["wheel_3_stop"])
         prev_offset = ctx.get("prev_offset")
         wd = lc.get("wheel_data", {}) or {}
         w3_suspected = (wd.get("3", {}) or {}).get("suspected_gates", []) or []
         w3_suspected = [float(x) for x in w3_suspected if x is not None]
         w3_suspected_label = ", ".join(_fmt_float(x) for x in w3_suspected)
-        # full revolution detection
-        visited = ctx.get("visited", [])
-        key = round(offset, 6)
-        span = (dial_max - dial_min + 1.0)
-        min_cycles = int((span / max(step_size, 1e-9)) + 0.999999)
-        ctx["min_cycles"] = min_cycles
-        if key in visited and cycle >= min_cycles:
+
+        if not isinstance(ctx.get("offsets"), list):
+            offsets = [offset]
+            cur = offset
+            max_cycles = int(((dial_max - dial_min + 1.0) / max(step_size, 1e-9)) + 10)
+            for _ in range(max_cycles):
+                cur = wrap_dial(cur - step_size, dial_min, dial_max)
+                if round(cur, 6) == round(offsets[0], 6):
+                    break
+                offsets.append(cur)
+            ctx["offsets"] = offsets
+            ctx["oi"] = 0
+
+        offsets = ctx.get("offsets", [])
+        oi = int(ctx.get("oi", 0) or 0)
+        if oi >= len(offsets):
             ctx["phase"] = "plot_offer"
             return _prompt_isolate_wheel_2(session, ctx)
-        visited.append(key)
-        ctx["visited"] = visited
 
-        min_cycles = int(ctx.get("min_cycles", min_cycles))
-        cycle_label = f"{cycle}/{min_cycles}"
-        if cycle >= 2:
+        offset = float(offsets[oi])
+        ctx["offset"] = offset
+        cycle_label = f"{oi+1}/{len(offsets)}"
+        if oi + 1 >= 2:
             if w3_suspected:
                 intro = f"passing wheel 3 suspected gate ({w3_suspected_label}) one time"
             else:
@@ -2337,7 +2364,9 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 detail_text = f"continue turning {' and '.join(continue_parts)}, "
             text = (
                 f"Cycle {cycle_label}\n"
-                f"Turn right (CW) {intro}, and {detail_text}until you reach {_fmt_float(offset)}, then stop.\n"
+                f"Turn right (CW) {intro}, and {detail_text}until you reach {_fmt_float(offset)}, then stop. "
+                f"(NOTE: if you did not make 1 full revolution turning from {_fmt_float(w3)} to {_fmt_float(offset)} "
+                f"continue turning until you have made 1 full revolution and reached {_fmt_float(offset)}.)\n"
                 f"Turn left (CCW) passing {_fmt_float(offset)} one time, then stopping on {_fmt_float(w3)}.\n"
                 f"Turn right (CW) until you hit the LCP. Enter LCP"
             )
@@ -2350,9 +2379,9 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         return {"id":"iso2.scan.lcp","kind":"float","text": text}
 
     if phase == "scan_rcp":
-        cycle = int(ctx.get("cycle",1) or 1)
-        min_cycles = int(ctx.get("min_cycles", cycle))
-        cycle_label = f"{cycle}/{min_cycles}"
+        offsets = ctx.get("offsets", []) or []
+        oi = int(ctx.get("oi", 0) or 0)
+        cycle_label = f"{oi+1}/{max(1, len(offsets))}"
         return {"id":"iso2.scan.rcp","kind":"float",
                 "text":f"Cycle {cycle_label}\nTurn left (CCW) until you hit RCP. Enter RCP"}
 
@@ -2543,7 +2572,8 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
 
     if pid == "iso2.step3":
         ctx["n"] = int(ctx.get("n",1) or 1) + 1
-        ctx["cycle"] = 1
+        ctx["oi"] = 0
+        ctx["offsets"] = None
         ctx["phase"] = "scan_lcp"
         return True, None
 
@@ -2576,12 +2606,14 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         ctx["rows"] = rows
 
         # advance offset
-        n = int(ctx.get("n",1) or 1)
-        next_offset = wrap_dial(w1 - (n * step_size), dial_min, dial_max)
+        offsets = ctx.get("offsets", []) or [offset]
+        oi = int(ctx.get("oi", 0) or 0) + 1
         ctx["prev_offset"] = offset
-        ctx["offset"] = next_offset
-        ctx["n"] = n + 1
-        ctx["cycle"] = int(ctx.get("cycle",1) or 1) + 1
+        if oi >= len(offsets):
+            ctx["phase"] = "plot_offer"
+            return True, None
+        ctx["oi"] = oi
+        ctx["offset"] = float(offsets[oi])
         ctx["phase"] = "scan_lcp"
         return True, None
 
@@ -3449,6 +3481,7 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
     wks = _tutorial_wheels_with_known_or_suspected(lc)
     if lc.get("awr_low_point") is None:
         actions.append(("FIND_AWR", None, "Find the All Wheels Right (AWR) low point"))
+    # After AWR, isolate wheel 3 only if we don't already have a known/suspected gate.
     if 3 not in wks:
         actions.append(("ISOLATE_WHEEL_3", None, "Isolate Wheel 3"))
     else:
@@ -3462,9 +3495,7 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
     if len(wks) == 2:
         missing = [w for w in (1, 2, 3) if w not in wks][0]
         actions.append(("ENUM_WHEEL", missing, f"Exhaustive Enumeration for Wheel {missing}"))
-    elif len(wks) < 2:
-        actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
-    else:
+    elif len(wks) >= 2:
         actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
     return actions
 
@@ -3485,6 +3516,11 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     total_steps = len(actions) if actions else step
     if ctx.pop("advance_step", False):
         step = min(step + 1, total_steps) if actions else step + 1
+        if ctx.get("last_action") == "FIND_AWR" and lc.get("awr_low_point") is not None:
+            for i, (kind, _, _) in enumerate(actions, 1):
+                if kind == "ISOLATE_WHEEL_3":
+                    step = i
+                    break
     if actions:
         step = min(step, total_steps)
     ctx["step"] = step
@@ -3561,6 +3597,7 @@ def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
             return True, None
         kind = str(ctx.get("action_kind", ""))
         detail = ctx.get("action_detail", None)
+        ctx["last_action"] = kind
         if kind == "FIND_AWR":
             _push(session, "find_awr", {})
         elif kind == "FIND_AWL":
