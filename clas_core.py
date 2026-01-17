@@ -627,9 +627,10 @@ Press Enter to return.""",
                 {"key": "2", "label": "Find AWR low point (guided)"},
                 {"key": "3", "label": "Isolate wheel 3 (3-wheel LRL)"},
                 {"key": "4", "label": "Isolate wheel 2 (3-wheel LRL)"},
-                {"key": "5", "label": "Exhaustive enumeration (all wheels)"},
-                {"key": "6", "label": "Exhaustive enumeration (single wheel)"},
-                {"key": "7", "label": "Return"},
+                {"key": "5", "label": "High Low Test (3-wheel LRL)"},
+                {"key": "6", "label": "Exhaustive enumeration (all wheels)"},
+                {"key": "7", "label": "Exhaustive enumeration (single wheel)"},
+                {"key": "8", "label": "Return"},
             ],
             "help": hint,
         }
@@ -648,6 +649,9 @@ Press Enter to return.""",
 
     if screen == "isolate_wheel_2":
         return _prompt_isolate_wheel_2(session, ctx)
+
+    if screen == "high_low_test":
+        return _prompt_high_low_test(session, ctx)
 
     if screen == "enum_all":
         return _prompt_enum_all(session, ctx)
@@ -877,6 +881,9 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
     if screen == "isolate_wheel_2":
         return _apply_isolate_wheel_2(session, ctx, parsed, prompt)
 
+    if screen == "high_low_test":
+        return _apply_high_low_test(session, ctx, parsed, prompt)
+
     if screen == "enum_all":
         return _apply_enum_all(session, ctx, parsed, prompt)
 
@@ -987,12 +994,15 @@ def _apply_tests_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tup
         _push(session, "isolate_wheel_2", {})
         return True, None
     if choice == "5":
-        _push(session, "enum_all", {})
+        _push(session, "high_low_test", {})
         return True, None
     if choice == "6":
-        _push(session, "enum_wheel", {})
+        _push(session, "enum_all", {})
         return True, None
     if choice == "7":
+        _push(session, "enum_wheel", {})
+        return True, None
+    if choice == "8":
         _pop(session)
         return True, None
     return False, "Invalid choice."
@@ -1842,6 +1852,7 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 "text":(
                     f"Isolate Wheel 3 complete. Sweep saved as sweep={sweep_id}.\n"
                     "You can plot this sweep later from the main menu.\n"
+                    "High Low Tests can help confirm whether suspected gates are on Wheel 3.\n"
                     "These tests can be long, consider saving your progress by typing s.\n\n"
                     f"Press Enter to return."
                 )}
@@ -1987,6 +1998,13 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
             ctx["phase"] = "finish"
             return True, None
         ctx["candidates"] = candidates
+        lc = session["state"]["lock_config"]
+        wd = lc.get("wheel_data", {}) or {}
+        w3 = wd.get("3", {}) or {}
+        w3["suspected_gates"] = [float(x) for x in candidates]
+        wd["3"] = w3
+        lc["wheel_data"] = wd
+        session["state"]["lock_config"] = normalize_lock_config(lc)
         ctx["phase"] = "refine_confirm"
         return True, None
 
@@ -2106,6 +2124,13 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
             ctx["phase"] = "finish"
             return True, None
         ctx["candidates"] = candidates
+        lc = session["state"]["lock_config"]
+        wd = lc.get("wheel_data", {}) or {}
+        w3 = wd.get("3", {}) or {}
+        w3["suspected_gates"] = [float(x) for x in candidates]
+        wd["3"] = w3
+        lc["wheel_data"] = wd
+        session["state"]["lock_config"] = normalize_lock_config(lc)
         ctx["phase"] = "refine_confirm"
         return True, None
 
@@ -2435,6 +2460,196 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         _pop(session)
         return True, None
 
+    return True, None
+
+
+# -----------------------
+# Screen: High Low Test (3-wheel LRL)
+# -----------------------
+
+def _prompt_high_low_test(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+    lc = session["state"]["lock_config"]
+    if int(lc.get("wheels", 0) or 0) != 3 or str(lc.get("turn_sequence","")).upper() != "LRL":
+        return {"id":"high_low.unsupported","kind":"confirm","text":"High Low Test is implemented for 3-wheel LRL locks. Press Enter to return."}
+
+    dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+
+    if "gate" not in ctx:
+        suspected = (lc.get("wheel_data", {}) or {}).get("3", {}).get("suspected_gates", []) or []
+        prompt = {"id":"high_low.gate","kind":"float","text":"Suspected true gate"}
+        if suspected:
+            prompt["default"] = _fmt_float(suspected[0])
+        return prompt
+
+    if "offset" not in ctx:
+        return {"id":"high_low.offset","kind":"float","text":"Offset to test","default":"10"}
+
+    if "combos" not in ctx:
+        gate = float(ctx["gate"])
+        offset = float(ctx["offset"])
+        combos = [
+            [wrap_dial(gate + offset, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max)],
+            [wrap_dial(gate, dial_min, dial_max), wrap_dial(gate + offset, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max)],
+            [wrap_dial(gate, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max), wrap_dial(gate + offset, dial_min, dial_max)],
+        ]
+        ctx["combos"] = combos
+        ctx["idx"] = 0
+        ctx["rows"] = []
+        ctx["phase"] = "combo_lcp"
+        ctx["mode"] = "high"
+        ctx["test_id"] = _next_high_low_test_id(session)
+
+    phase = str(ctx.get("phase", "combo_lcp"))
+    idx = int(ctx.get("idx", 0) or 0)
+    combos = ctx.get("combos", [])
+
+    if phase == "combo_lcp":
+        if idx >= len(combos):
+            ctx["phase"] = "ask_low" if ctx.get("mode") == "high" else "result"
+            return _prompt_high_low_test(session, ctx)
+        c1, c2, c3 = [float(x) for x in combos[idx]]
+        return {
+            "id":"high_low.lcp",
+            "kind":"float",
+            "text":(
+                f"High Low Test\nCombination {idx+1}/3: [{_fmt_float(c1)}, {_fmt_float(c2)}, {_fmt_float(c3)}]\n"
+                f"Turn left (CCW) passing {_fmt_float(c1)} three times, and continue until you hit {_fmt_float(c1)}, then stop.\n"
+                f"Turn right (CW) passing {_fmt_float(c1)} two times, and continue until you hit {_fmt_float(c2)}, then stop.\n"
+                f"Turn left (CCW) passing {_fmt_float(c2)} one time, and continue until you hit {_fmt_float(c3)}, then stop.\n"
+                "Turn right (CW) to the LCP. Enter LCP"
+            ),
+        }
+
+    if phase == "combo_rcp":
+        return {"id":"high_low.rcp","kind":"float","text":"Turn left (CCW) to the RCP. Enter RCP"}
+
+    if phase == "ask_low":
+        return {
+            "id":"high_low.ask_low",
+            "kind":"choice",
+            "text":"Run Low Test (minus offset)?",
+            "choices": [
+                {"key":"1","label":"Yes"},
+                {"key":"2","label":"No"},
+            ],
+        }
+
+    if phase == "result":
+        rows = ctx.get("rows", []) or []
+        result_line = "Result inconclusive (tie)."
+        if rows:
+            max_by_case: Dict[int, float] = {}
+            for r in rows:
+                try:
+                    case = int(r.get("hw_case", 0) or 0)
+                except Exception:
+                    continue
+                if case < 1 or case > 3:
+                    continue
+                w = float(r.get("contact_width", 0.0))
+                if case not in max_by_case or w > max_by_case[case]:
+                    max_by_case[case] = w
+            if max_by_case:
+                max_w = max(max_by_case.values())
+                winners = [c for c, w in max_by_case.items() if w == max_w]
+                if len(winners) == 1:
+                    case = winners[0]
+                    result_line = f"Largest contact width in case {case}. Gate is likely on Wheel {case}."
+        return {
+            "id":"high_low.done",
+            "kind":"confirm",
+            "text":(
+                "High Low Test complete.\n"
+                f"{result_line}\n\n"
+                "You can plot this test later from the main menu.\n\n"
+                "Press Enter to return."
+            ),
+        }
+
+    return {"id":"high_low.unknown","kind":"confirm","text":"Press Enter to return."}
+
+
+def _apply_high_low_test(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+    pid = prompt.get("id","")
+    if pid in ("high_low.unsupported","high_low.unknown","high_low.done"):
+        _pop(session)
+        return True, None
+
+    if pid == "high_low.gate":
+        ctx["gate"] = float(parsed)
+        return True, None
+
+    if pid == "high_low.offset":
+        try:
+            offset = float(parsed)
+        except Exception:
+            return False, "Enter a number."
+        if offset <= 0:
+            return False, "Offset must be positive."
+        ctx["offset"] = offset
+        return True, None
+
+    if pid == "high_low.lcp":
+        ctx["current_lcp"] = float(parsed)
+        ctx["phase"] = "combo_rcp"
+        return True, None
+
+    if pid == "high_low.rcp":
+        lc = session["state"]["lock_config"]
+        dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+        combos = ctx.get("combos", [])
+        idx = int(ctx.get("idx", 0) or 0)
+        if idx >= len(combos):
+            ctx["phase"] = "ask_low" if ctx.get("mode") == "high" else "result"
+            return True, None
+        c1, c2, c3 = [float(x) for x in combos[idx]]
+        lcp = float(ctx.get("current_lcp"))
+        rcp = float(parsed)
+        row = {
+            "id": _next_measurement_id(session, ctx),
+            "combination_wheel_1": c1,
+            "combination_wheel_2": c2,
+            "combination_wheel_3": c3,
+            "left_contact": lcp,
+            "right_contact": rcp,
+            "contact_width": circular_distance(rcp, lcp, dial_min, dial_max),
+            "sweep": None,
+            "high_low_test": int(ctx.get("test_id")),
+            "hw_gate": float(ctx.get("gate")),
+            "hw_offset": float(ctx.get("offset")),
+            "hw_increment": float(ctx.get("offset")),
+            "hw_case": idx + 1,
+            "hw_type": str(ctx.get("mode", "high")),
+            "lock_config": {"dial_min": dial_min, "dial_max": dial_max},
+            "notes": "",
+        }
+        session["state"]["measurements"].append(row)
+        ctx.setdefault("rows", []).append(row)
+        ctx["idx"] = idx + 1
+        ctx["phase"] = "combo_lcp"
+        return True, None
+
+    if pid == "high_low.ask_low":
+        if str(parsed) == "1":
+            lc = session["state"]["lock_config"]
+            dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+            gate = float(ctx.get("gate"))
+            offset = float(ctx.get("offset"))
+            low_offset = -offset
+            combos = [
+                [wrap_dial(gate + low_offset, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max)],
+                [wrap_dial(gate, dial_min, dial_max), wrap_dial(gate + low_offset, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max)],
+                [wrap_dial(gate, dial_min, dial_max), wrap_dial(gate, dial_min, dial_max), wrap_dial(gate + low_offset, dial_min, dial_max)],
+            ]
+            ctx["combos"] = combos
+            ctx["idx"] = 0
+            ctx["mode"] = "low"
+            ctx["phase"] = "combo_lcp"
+            return True, None
+        ctx["phase"] = "result"
+        return True, None
+
+    _pop(session)
     return True, None
 
 
@@ -2952,6 +3167,8 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
         actions.append(("FIND_AWR", None, "Find the All Wheels Right (AWR) low point"))
     if 3 not in wks:
         actions.append(("ISOLATE_WHEEL_3", None, "Isolate Wheel 3"))
+    else:
+        actions.append(("HIGH_LOW", None, "High Low Test (confirm Wheel 3 gate)"))
     if lc.get("awl_low_point") is None:
         actions.append(("FIND_AWL", None, "Find the All Wheels Left (AWL) low point"))
     if 2 not in wks:
@@ -3066,6 +3283,8 @@ def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
             _push(session, "isolate_wheel_3", {})
         elif kind == "ISOLATE_WHEEL_2":
             _push(session, "isolate_wheel_2", {})
+        elif kind == "HIGH_LOW":
+            _push(session, "high_low_test", {})
         elif kind == "ENUM_ALL":
             _push(session, "enum_all", {})
         elif kind == "ENUM_WHEEL":
@@ -3120,3 +3339,15 @@ def _next_iso_test_id(session: Session, test_name: str) -> int:
             except Exception:
                 pass
     return imax + 1
+
+
+def _next_high_low_test_id(session: Session) -> int:
+    meas = session["state"]["measurements"]
+    hmax = 0
+    for m in meas:
+        if m.get("high_low_test") is not None:
+            try:
+                hmax = max(hmax, int(m.get("high_low_test", 0) or 0))
+            except Exception:
+                pass
+    return hmax + 1

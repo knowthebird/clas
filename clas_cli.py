@@ -123,6 +123,7 @@ def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_pat
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
     from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter
     import numpy as np
 
     if not measurements:
@@ -278,7 +279,8 @@ def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_pat
 def _plot_high_low_png(measurements: list, test_id: int, out_path: Path, session_name: str = "") -> None:
     import matplotlib
     matplotlib.use("Agg")
-    
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
     import numpy as np
 
     data = [m for m in measurements if str(m.get("high_low_test", "")) == str(test_id)]
@@ -287,6 +289,16 @@ def _plot_high_low_png(measurements: list, test_id: int, out_path: Path, session
 
     high = [m for m in data if str(m.get("hw_type", "")).strip().lower() == "high"]
     low = [m for m in data if str(m.get("hw_type", "")).strip().lower() == "low"]
+    dial_min = 0.0
+    dial_max = 99.0
+    try:
+        lc0 = data[0].get("lock_config", {})
+        if isinstance(lc0, dict):
+            dial_min = float(lc0.get("dial_min", dial_min))
+            dial_max = float(lc0.get("dial_max", dial_max))
+    except Exception:
+        pass
+    n_dial = float(dial_max - dial_min + 1)
 
     def combo_label(m):
         c1 = m.get("combination_wheel_1", "")
@@ -299,16 +311,6 @@ def _plot_high_low_png(measurements: list, test_id: int, out_path: Path, session
             return np.array([]), np.array([]), np.array([]), np.array([]), []
         l_raw = [float(m["left_contact"]) for m in meas]
         r_raw = [float(m["right_contact"]) for m in meas]
-
-        dial_min = 0.0
-        dial_max = 99.0
-        try:
-            lc = meas[0].get("lock_config", {})
-            if isinstance(lc, dict):
-                dial_min = float(lc.get("dial_min", dial_min))
-                dial_max = float(lc.get("dial_max", dial_max))
-        except Exception:
-            pass
 
         l_unwrapped, n_dial = _unwrap_series(l_raw, dial_min=dial_min, dial_max=dial_max, anchor=float(l_raw[0]) if l_raw else None)
         r_unwrapped, _ = _unwrap_series(r_raw, dial_min=dial_min, dial_max=dial_max, anchor=float(r_raw[0]) if r_raw else None)
