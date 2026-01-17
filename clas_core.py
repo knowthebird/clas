@@ -69,6 +69,7 @@ PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
 CLAS_CORE_VERSION = "0.2.1"
+FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
 # Lock config helpers
@@ -213,11 +214,9 @@ def _format_wheel_data(lock_config: Dict[str, Any]) -> str:
         )
     return "\n".join(lines) if lines else "    (none)"
 
-
-FLOAT_DISPLAY_PRECISION = 2
-
-
-def _fmt_float(val: Any, digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+def _fmt_float(val: Any, digits: Optional[int] = None) -> str:
+    if digits is None:
+        digits = FLOAT_DISPLAY_PRECISION
     if val is None:
         return "None"
     if isinstance(val, bool):
@@ -228,11 +227,11 @@ def _fmt_float(val: Any, digits: int = FLOAT_DISPLAY_PRECISION) -> str:
         return str(val)
 
 
-def _fmt_float_list(vals: List[Any], digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+def _fmt_float_list(vals: List[Any], digits: Optional[int] = None) -> str:
     return "[" + ", ".join(_fmt_float(v, digits) for v in vals) + "]"
 
 
-def _fmt_float_tuple(vals: List[Any], digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+def _fmt_float_tuple(vals: List[Any], digits: Optional[int] = None) -> str:
     return "(" + ", ".join(_fmt_float(v, digits) for v in vals) + ")"
 
 
@@ -299,7 +298,7 @@ def new_session(session_name: str = "session") -> Session:
         "state": {
             "lock_config": normalize_lock_config(default_lock_config()),
             "measurements": [],
-            "metadata": {},
+            "metadata": {"float_display_precision": FLOAT_DISPLAY_PRECISION},
         },
         # stack-based navigation; top of stack is active
         "runtime": {
@@ -315,6 +314,7 @@ def normalize_session(session: Session) -> Session:
     Normalize/upgrade a loaded session. Also supports importing old-format sessions
     from earlier monolithic versions (top-level lock_config/measurements/session_name).
     """
+    global FLOAT_DISPLAY_PRECISION
     if not isinstance(session, dict):
         return new_session("session")
 
@@ -347,6 +347,13 @@ def normalize_session(session: Session) -> Session:
     state.setdefault("metadata", {})
     if not isinstance(state["metadata"], dict):
         state["metadata"] = {}
+    try:
+        precision = int(state["metadata"].get("float_display_precision", FLOAT_DISPLAY_PRECISION))
+    except Exception:
+        precision = FLOAT_DISPLAY_PRECISION
+    precision = max(0, min(precision, 10))
+    state["metadata"]["float_display_precision"] = precision
+    FLOAT_DISPLAY_PRECISION = precision
     state["lock_config"] = normalize_lock_config(state.get("lock_config", {}))
     sess["state"] = state
 
@@ -466,9 +473,48 @@ def get_prompt(session: Session) -> PromptSpec:
                 {"key": "2", "label": "Tests"},
                 {"key": "3", "label": "Analyze / Plot"},
                 {"key": "4", "label": "Tutorial"},
-                {"key": "5", "label": "About"},
-                {"key": "6", "label": "Resources"},
+                {"key": "5", "label": "Settings"},
+                {"key": "6", "label": "About"},
+                {"key": "7", "label": "Learn more"},
             ],
+            "help": hint,
+        }
+
+    if screen == "settings_menu":
+        return {
+            "id": "settings.menu",
+            "kind": "choice",
+            "text": "Settings",
+            "choices": [
+                {"key": "1", "label": "Set float display precision"},
+                {"key": "2", "label": "Clear saved history"},
+                {"key": "3", "label": "Return"},
+            ],
+            "help": hint,
+        }
+
+    if screen == "settings_precision":
+        cur = session["state"]["metadata"].get("float_display_precision", FLOAT_DISPLAY_PRECISION)
+        return {
+            "id": "settings.precision",
+            "kind": "int",
+            "text": "Float display precision (0-10)",
+            "default": str(cur),
+            "help": hint,
+        }
+
+    if screen == "settings_cleared":
+        return {
+            "id": "settings.cleared",
+            "kind": "confirm",
+            "text": "History cleared.\n\nPress Enter to return.",
+            "help": hint,
+        }
+    if screen == "settings_clear_confirm":
+        return {
+            "id": "settings.clear_confirm",
+            "kind": "bool_yn",
+            "text": "Clear history?\nThis will remove undo access to prior states (undo will still work for future actions).\nConfirm (y/n)",
             "help": hint,
         }
 
@@ -565,6 +611,7 @@ Press Enter to return.""",
                 {"key": "4", "label": "Isolate wheel 2 (3-wheel LRL)"},
                 {"key": "5", "label": "Exhaustive enumeration (all wheels)"},
                 {"key": "6", "label": "Exhaustive enumeration (single wheel)"},
+                {"key": "7", "label": "Return"},
             ],
             "help": hint,
         }
@@ -645,6 +692,9 @@ def apply_action(session: Session, action: Action) -> Session:
             # Store last error for adapter to display (no I/O here)
             _top(session)["ctx"]["_last_error"] = err or "Invalid input."
             return session
+        if session.get("runtime", {}).pop("_suppress_history_once", False):
+            _top(session)["ctx"].pop("_last_error", None)
+            return session
         # record and advance
         session["history"].append(event)
         session["cursor"] += 1
@@ -660,6 +710,9 @@ def rebuild(session: Session) -> Session:
     """
     session = normalize_session(session)
     hist = list(session.get("history", []) or [])
+    if not hist:
+        session["cursor"] = 0
+        return session
     cursor = int(session.get("cursor", 0) or 0)
     cursor = max(0, min(cursor, len(hist)))
 
@@ -768,6 +821,18 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
     if screen == "tutorial":
         return _apply_tutorial(session, ctx, parsed, prompt)
 
+    if screen == "settings_menu":
+        return _apply_settings_menu(session, ctx, parsed)
+
+    if screen == "settings_precision":
+        return _apply_settings_precision(session, ctx, parsed)
+
+    if screen == "settings_clear_confirm":
+        return _apply_settings_clear_confirm(session, ctx, parsed)
+
+    if screen == "settings_cleared":
+        session["runtime"]["stack"] = [{"screen": "main_menu", "ctx": {}}]
+        return True, None
 
     if screen == "tests_menu":
         return _apply_tests_menu(session, ctx, parsed)
@@ -825,13 +890,58 @@ def _apply_main_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tupl
         _push(session, "tutorial", {})
         return True, None
     if choice == "5":
-        _push(session, "about", {})
+        _push(session, "settings_menu", {})
         return True, None
     if choice == "6":
+        _push(session, "about", {})
+        return True, None
+    if choice == "7":
         _push(session, "resources", {})
         return True, None
 
     return False, "Invalid choice."
+
+
+# -----------------------
+# Screen: settings menu
+# -----------------------
+
+def _apply_settings_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tuple[bool, Optional[str]]:
+    if choice == "1":
+        _push(session, "settings_precision", {})
+        return True, None
+    if choice == "2":
+        _push(session, "settings_clear_confirm", {})
+        return True, None
+    if choice == "3":
+        _pop(session)
+        return True, None
+    return False, "Invalid choice."
+
+
+def _apply_settings_precision(session: Session, ctx: Dict[str, Any], value: int) -> Tuple[bool, Optional[str]]:
+    try:
+        precision = int(value)
+    except Exception:
+        return False, "Expected an integer."
+    if precision < 0 or precision > 10:
+        return False, "Precision must be between 0 and 10."
+    session["state"]["metadata"]["float_display_precision"] = precision
+    global FLOAT_DISPLAY_PRECISION
+    FLOAT_DISPLAY_PRECISION = precision
+    _pop(session)
+    return True, None
+
+
+def _apply_settings_clear_confirm(session: Session, ctx: Dict[str, Any], confirm: bool) -> Tuple[bool, Optional[str]]:
+    if confirm:
+        session["history"] = []
+        session["cursor"] = 0
+        session.setdefault("runtime", {})["_suppress_history_once"] = True
+        session["runtime"]["stack"] = [{"screen": "main_menu", "ctx": {}}]
+    else:
+        _pop(session)
+    return True, None
 
 
 # -----------------------
@@ -857,6 +967,9 @@ def _apply_tests_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tup
     if choice == "6":
         _push(session, "enum_wheel", {})
         return True, None
+    if choice == "7":
+        _pop(session)
+        return True, None
     return False, "Invalid choice."
 
 
@@ -877,16 +990,30 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
 
     # Step 0: show summary and ask edit?
     if step == 0:
+        rows = [
+            ("Make", lc.get("make", "UNKNOWN")),
+            ("UL Rating", lc.get("ul", "UNKNOWN")),
+            ("Total Wheels", lc["wheels"]),
+            ("Fence", lc.get("fence_type", "UNKNOWN")),
+            ("Turn Sequence", lc["turn_sequence"]),
+            ("Dial Range", f"{_fmt_float(lc['dial_min'])}..{_fmt_float(lc['dial_max'])}"),
+            ("Flies", lc.get("flies", "fixed")),
+            ("Tolerance", f"±{_fmt_float(lc['tolerance'])}"),
+            ("Oval Wheels", lc.get("oval_wheels", "UNKNOWN")),
+            ("AWL Low Point", _fmt_float(lc.get("awl_low_point"))),
+            ("AWR Low Point", _fmt_float(lc.get("awr_low_point"))),
+            ("approx_lcp_location", _fmt_float(lc.get("approx_lcp_location"))),
+            ("approx_rcp_location", _fmt_float(lc.get("approx_rcp_location"))),
+        ]
+        label_width = max(len(label) for label, _ in rows)
+        lines = [
+            f"  {label:<{label_width}}: {value}"
+            for label, value in rows
+        ]
         summary = (
             "Current configuration:\n"
-            f"  wheels={lc['wheels']}  dial={_fmt_float(lc['dial_min'])}..{_fmt_float(lc['dial_max'])}  "
-            f"tol=±{_fmt_float(lc['tolerance'])}\n"
-            f"  turn_sequence={lc['turn_sequence']}  flies={lc.get('flies','fixed')}\n"
-            f"  make={lc.get('make','UNKNOWN')}  fence={lc.get('fence_type','UNKNOWN')}  ul={lc.get('ul','UNKNOWN')}\n"
-            f"  oval_wheels={lc.get('oval_wheels','UNKNOWN')}\n"
-            f"  awr_low_point={_fmt_float(lc.get('awr_low_point'))}  awl_low_point={_fmt_float(lc.get('awl_low_point'))}\n"
-            f"  approx_lcp_location={_fmt_float(lc.get('approx_lcp_location'))}  "
-            f"approx_rcp_location={_fmt_float(lc.get('approx_rcp_location'))}\n"
+            + "\n".join(lines)
+            + "\n"
             f"  wheel_data (gates):\n{_format_wheel_data(lc)}\n\n"
             "Edit configuration?\n"
         )
@@ -894,7 +1021,7 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "id": "config.edit",
             "kind": "choice",
             "text": summary,
-            "choices": [{"key": "1", "label": "Yes"}, {"key": "2", "label": "No"}],
+            "choices": [{"key": "1", "label": "Yes"}, {"key": "2", "label": "No (Return)"}],
         }
 
     if not editing:
@@ -904,79 +1031,13 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "id": "config.edit",
             "kind": "choice",
             "text": "Edit configuration?\n  1) Yes\n  2) No (return)\n",
-            "choices": [{"key": "1", "label": "Yes"}, {"key": "2", "label": "No"}],
+            "choices": [{"key": "1", "label": "Yes"}, {"key": "2", "label": "No (Return)"}],
         }
 
-    # Field steps
+    # Field steps (kept in same order as summary)
     if step == 1:
-        return {"id":"config.wheels","kind":"int","text":"Number of wheels", "default": int(work.get("wheels", lc["wheels"]))}
-    if step == 2:
-        return {"id":"config.dial_min","kind":"float","text":"Dial minimum value", "default": _fmt_float(work.get("dial_min", lc["dial_min"]))}
-    if step == 3:
-        return {"id":"config.dial_max","kind":"float","text":"Dial maximum value", "default": _fmt_float(work.get("dial_max", lc["dial_max"]))}
-    if step == 4:
-        return {"id":"config.tolerance","kind":"float","text":"Lock tolerance (±)", "default": _fmt_float(work.get("tolerance", lc["tolerance"]))}
-    if step == 5:
-        cur = str(work.get("turn_sequence", lc["turn_sequence"])).strip().upper()
-        opts = ["LRL", "RLR"]
-        try:
-            default_key = str(opts.index(cur) + 1)
-        except ValueError:
-            default_key = "1"
-        return {
-            "id":"config.turn_sequence",
-            "kind":"choice",
-            "text":"Turn sequence",
-            "choices":[
-                {"key":"1","label":"LRL","value":"LRL"},
-                {"key":"2","label":"RLR","value":"RLR"},
-            ],
-            "default": default_key,
-        }
-
-    if step == 6:
-        cur = str(work.get("flies", lc.get("flies", "fixed"))).strip().lower()
-        # normalize legacy boolean flies -> fixed/moveable
-        if cur in ("true", "yes", "y", "1"):
-            cur = "moveable"
-        elif cur in ("false", "no", "n", "0"):
-            cur = "fixed"
-
-        default_key = "2" if cur in ("moveable", "movable") else "1"
-        return {
-            "id":"config.flies",
-            "kind":"choice",
-            "text":"Wheel flies",
-            "choices":[
-                {"key":"1","label":"FIXED","value":"fixed"},
-                {"key":"2","label":"MOVEABLE","value":"moveable"},
-            ],
-            "default": default_key,
-        }
-
-    if step == 7:
         return {"id":"config.make","kind":"text","text":"Make", "default": str(work.get("make", lc.get("make","UNKNOWN")))}
-    if step == 8:
-        cur = str(work.get("fence_type", lc.get("fence_type","UNKNOWN"))).strip().upper()
-        opts = ["FRICTION_FENCE","GRAVITY_LEVER","SPRING_LEVER","UNKNOWN"]
-        try:
-            default_key = str(opts.index(cur) + 1)
-        except ValueError:
-            default_key = "4"
-        return {
-            "id":"config.fence_type",
-            "kind":"choice",
-            "text":"Fence / lever type",
-            "choices":[
-                {"key":"1","label":"FRICTION_FENCE","value":"FRICTION_FENCE"},
-                {"key":"2","label":"GRAVITY_LEVER","value":"GRAVITY_LEVER"},
-                {"key":"3","label":"SPRING_LEVER","value":"SPRING_LEVER"},
-                {"key":"4","label":"UNKNOWN","value":"UNKNOWN"},
-            ],
-            "default": default_key,
-        }
-
-    if step == 9:
+    if step == 2:
         cur = str(work.get("ul", lc.get("ul","UNKNOWN"))).strip().upper()
         opts = ["2","2M","1","1R","UNKNOWN"]
         try:
@@ -996,7 +1057,69 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             ],
             "default": default_key,
         }
+    if step == 3:
+        return {"id":"config.wheels","kind":"int","text":"Number of wheels", "default": int(work.get("wheels", lc["wheels"]))}
+    if step == 4:
+        cur = str(work.get("fence_type", lc.get("fence_type","UNKNOWN"))).strip().upper()
+        opts = ["FRICTION_FENCE","GRAVITY_LEVER","SPRING_LEVER","UNKNOWN"]
+        try:
+            default_key = str(opts.index(cur) + 1)
+        except ValueError:
+            default_key = "4"
+        return {
+            "id":"config.fence_type",
+            "kind":"choice",
+            "text":"Fence / lever type",
+            "choices":[
+                {"key":"1","label":"FRICTION_FENCE","value":"FRICTION_FENCE"},
+                {"key":"2","label":"GRAVITY_LEVER","value":"GRAVITY_LEVER"},
+                {"key":"3","label":"SPRING_LEVER","value":"SPRING_LEVER"},
+                {"key":"4","label":"UNKNOWN","value":"UNKNOWN"},
+            ],
+            "default": default_key,
+        }
+    if step == 5:
+        cur = str(work.get("turn_sequence", lc["turn_sequence"])).strip().upper()
+        opts = ["LRL", "RLR"]
+        try:
+            default_key = str(opts.index(cur) + 1)
+        except ValueError:
+            default_key = "1"
+        return {
+            "id":"config.turn_sequence",
+            "kind":"choice",
+            "text":"Turn sequence",
+            "choices":[
+                {"key":"1","label":"LRL","value":"LRL"},
+                {"key":"2","label":"RLR","value":"RLR"},
+            ],
+            "default": default_key,
+        }
+    if step == 6:
+        return {"id":"config.dial_min","kind":"float","text":"Dial minimum value", "default": _fmt_float(work.get("dial_min", lc["dial_min"]))}
+    if step == 7:
+        return {"id":"config.dial_max","kind":"float","text":"Dial maximum value", "default": _fmt_float(work.get("dial_max", lc["dial_max"]))}
+    if step == 8:
+        cur = str(work.get("flies", lc.get("flies", "fixed"))).strip().lower()
+        # normalize legacy boolean flies -> fixed/moveable
+        if cur in ("true", "yes", "y", "1"):
+            cur = "moveable"
+        elif cur in ("false", "no", "n", "0"):
+            cur = "fixed"
 
+        default_key = "2" if cur in ("moveable", "movable") else "1"
+        return {
+            "id":"config.flies",
+            "kind":"choice",
+            "text":"Wheel flies",
+            "choices":[
+                {"key":"1","label":"FIXED","value":"fixed"},
+                {"key":"2","label":"MOVEABLE","value":"moveable"},
+            ],
+            "default": default_key,
+        }
+    if step == 9:
+        return {"id":"config.tolerance","kind":"float","text":"Lock tolerance (±)", "default": _fmt_float(work.get("tolerance", lc["tolerance"]))}
     if step == 10:
         cur = str(work.get("oval_wheels", lc.get("oval_wheels","UNKNOWN"))).strip().upper()
         opts = ["UNKNOWN","YES","NO"]
@@ -1015,15 +1138,14 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             ],
             "default": default_key,
         }
-
     if step == 11:
-        cur = work.get("awr_low_point", lc.get("awr_low_point"))
-        default = "" if cur is None else _fmt_float(cur)
-        return {"id":"config.awr_low_point","kind":"text","text":"AWR low point (number; '-' to clear; Enter to keep)", "default": default}
-    if step == 12:
         cur = work.get("awl_low_point", lc.get("awl_low_point"))
         default = "" if cur is None else _fmt_float(cur)
         return {"id":"config.awl_low_point","kind":"text","text":"AWL low point (number; '-' to clear; Enter to keep)", "default": default}
+    if step == 12:
+        cur = work.get("awr_low_point", lc.get("awr_low_point"))
+        default = "" if cur is None else _fmt_float(cur)
+        return {"id":"config.awr_low_point","kind":"text","text":"AWR low point (number; '-' to clear; Enter to keep)", "default": default}
     if step == 13:
         cur = work.get("approx_lcp_location", lc.get("approx_lcp_location"))
         default = "" if cur is None else _fmt_float(cur)
@@ -1084,26 +1206,21 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
 
     # field steps
     if step == 1:
-        work["wheels"] = int(parsed)
-        # ensure wheel buckets exist immediately
-        ctx["work"] = normalize_lock_config(work)
+        work["make"] = str(parsed).strip() or "UNKNOWN"
         ctx["step"] = 2
         return True, None
     if step == 2:
-        work["dial_min"] = float(parsed)
+        work["ul"] = str(parsed).strip().upper() or "UNKNOWN"
         ctx["step"] = 3
         return True, None
     if step == 3:
-        work["dial_max"] = float(parsed)
-        # validate dial range
-        if float(work["dial_max"]) <= float(work["dial_min"]):
-            return False, "Dial max must be greater than dial min."
+        work["wheels"] = int(parsed)
+        # ensure wheel buckets exist immediately
+        ctx["work"] = normalize_lock_config(work)
         ctx["step"] = 4
         return True, None
     if step == 4:
-        work["tolerance"] = float(parsed)
-        if work["tolerance"] <= 0:
-            work["tolerance"] = 1.0
+        work["fence_type"] = str(parsed).strip().upper() or "UNKNOWN"
         ctx["step"] = 5
         return True, None
     if step == 5:
@@ -1111,35 +1228,39 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
         ctx["step"] = 6
         return True, None
     if step == 6:
-        key = str(parsed).strip().upper()
-        work["flies"] = "moveable" if key == "MOVEABLE" else "fixed"
+        work["dial_min"] = float(parsed)
         ctx["step"] = 7
         return True, None
     if step == 7:
-        work["make"] = str(parsed).strip() or "UNKNOWN"
+        work["dial_max"] = float(parsed)
+        # validate dial range
+        if float(work["dial_max"]) <= float(work["dial_min"]):
+            return False, "Dial max must be greater than dial min."
         ctx["step"] = 8
         return True, None
     if step == 8:
-        work["fence_type"] = str(parsed).strip().upper() or "UNKNOWN"
+        key = str(parsed).strip().upper()
+        work["flies"] = "moveable" if key == "MOVEABLE" else "fixed"
         ctx["step"] = 9
         return True, None
     if step == 9:
-        work["ul"] = str(parsed).strip().upper() or "UNKNOWN"
+        work["tolerance"] = float(parsed)
+        if work["tolerance"] <= 0:
+            work["tolerance"] = 1.0
         ctx["step"] = 10
         return True, None
     if step == 10:
         work["oval_wheels"] = str(parsed).strip().upper() or "UNKNOWN"
         ctx["step"] = 11
         return True, None
-
     if step == 11:
-        ok, err = _apply_optional_float("awr_low_point")
+        ok, err = _apply_optional_float("awl_low_point")
         if not ok:
             return False, err
         ctx["step"] = 12
         return True, None
     if step == 12:
-        ok, err = _apply_optional_float("awl_low_point")
+        ok, err = _apply_optional_float("awr_low_point")
         if not ok:
             return False, err
         ctx["step"] = 13
