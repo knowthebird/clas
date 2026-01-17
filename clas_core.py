@@ -203,9 +203,37 @@ def _format_wheel_data(lock_config: Dict[str, Any]) -> str:
         kg = wdata.get("known_gates", []) or []
         sg = wdata.get("suspected_gates", []) or []
         fg = wdata.get("false_gates", []) or []
-        lines.append(f"    wheel {w}: known={kg} suspected={sg} false={fg}")
+        lines.append(
+            "    wheel {w}: known={kg} suspected={sg} false={fg}".format(
+                w=w,
+                kg=_fmt_float_list(kg),
+                sg=_fmt_float_list(sg),
+                fg=_fmt_float_list(fg),
+            )
+        )
     return "\n".join(lines) if lines else "    (none)"
 
+
+FLOAT_DISPLAY_PRECISION = 2
+
+
+def _fmt_float(val: Any, digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+    if val is None:
+        return "None"
+    if isinstance(val, bool):
+        return str(val)
+    try:
+        return f"{float(val):.{digits}f}"
+    except Exception:
+        return str(val)
+
+
+def _fmt_float_list(vals: List[Any], digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+    return "[" + ", ".join(_fmt_float(v, digits) for v in vals) + "]"
+
+
+def _fmt_float_tuple(vals: List[Any], digits: int = FLOAT_DISPLAY_PRECISION) -> str:
+    return "(" + ", ".join(_fmt_float(v, digits) for v in vals) + ")"
 
 
 # -----------------------
@@ -229,32 +257,35 @@ def circular_distance(a: float, b: float, dial_min: float, dial_max: float) -> f
     return float(d)
 
 
-def build_checkpoints(dial_min: float, dial_max: float) -> List[float]:
+def build_checkpoints(dial_min: float, dial_max: float, n_points: int = 10) -> List[float]:
     """
-    10 checkpoints, matching the old program pattern:
-    - Start at dial_min
-    - Then decade-ish points descending (e.g., 90..10 on 0-99)
-    - Adjusted/wrapped into range
+    Build evenly-spaced checkpoints for AWL/AWR scans.
+
+    New spacing rule:
+      step = dial_span / n_points
+    where:
+      dial_span = (dial_max - dial_min) + 1
     """
-    # Handle non-0..99 dials by scaling decade points
-    span = (dial_max - dial_min) + 1.0
-    # target around 10 evenly spaced values (excluding dial_min already)
-    pts = [dial_min]
-    if span <= 1:
-        return pts * 10
 
-    # try decade style if near 0..99
-    if abs(dial_min - 0.0) < 1e-6 and abs(dial_max - 99.0) < 1e-6:
-        for v in [90,80,70,60,50,40,30,20,10]:
-            pts.append(float(v))
-        return pts
+    try:
+        n = int(n_points or 0)
+    except Exception:
+        n = 10
 
-    step = span / 10.0
-    cur = dial_max - step
-    for _ in range(9):
-        pts.append(wrap_dial(cur, dial_min, dial_max))
-        cur -= step
-    return pts
+    if n < 1:
+        n = 1
+    if n > 36000:
+        n = 36000
+
+    if n == 1:
+        return [float(dial_min)]
+
+    dial_span = float((dial_max - dial_min) + 1.0)
+    if dial_span <= 0:
+        return [float(dial_min)]
+
+    step = dial_span / float(n)
+    return [wrap_dial(float(dial_min + (i * step)), dial_min, dial_max) for i in range(n)]
 
 
 # -----------------------
@@ -478,18 +509,18 @@ Press Enter to return.""",
 
 Books, Papers, and Tools:
 
-  • Sophie Houlden’s Safecracking Simulator
+  - Sophie Houlden's Safecracking Simulator
     https://sophieh.itch.io/sophies-safecracking-simulator
 
-  • Safecracking for Everyone (2nd Edition)
+  - Safecracking for Everyone (2nd Edition)
     Jared Dygert
     https://drive.google.com/file/d/1xqfTAq-NY6-hXiPB0u44vdNjeMXbHJEz/view
 
-  • Safe Lock Manipulation 101
+  - Safe Lock Manipulation 101
     Jan-Willem Markus
     https://blackbag.toool.nl/wp-content/uploads/2024/02/Safe-manipulation-101-v2.pdf
 
-  • Safecracking 101: A Beginner’s Guide to Safe Manipulation and Drilling
+  - Safecracking 101: A Beginner's Guide to Safe Manipulation and Drilling
     Thomas A. Mazzone & Thomas G. Seroogy
     https://dn720001.ca.archive.org/0/items/safecracking-101-a-beginners-guide-to-safe-manipulation-and-drilling/safecracking%20101%20-%20A%20Beginners%20Guide%20to%20Safe%20Manipulation%20and%20Drilling%20-%20Thomas%20Mazzone%20-%202013.pdf
 
@@ -848,16 +879,16 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     if step == 0:
         summary = (
             "Current configuration:\n"
-            f"  wheels={lc['wheels']}  dial={lc['dial_min']}..{lc['dial_max']}  tol=±{lc['tolerance']}\n"
+            f"  wheels={lc['wheels']}  dial={_fmt_float(lc['dial_min'])}..{_fmt_float(lc['dial_max'])}  "
+            f"tol=±{_fmt_float(lc['tolerance'])}\n"
             f"  turn_sequence={lc['turn_sequence']}  flies={lc.get('flies','fixed')}\n"
             f"  make={lc.get('make','UNKNOWN')}  fence={lc.get('fence_type','UNKNOWN')}  ul={lc.get('ul','UNKNOWN')}\n"
             f"  oval_wheels={lc.get('oval_wheels','UNKNOWN')}\n"
-            f"  awr_low_point={lc.get('awr_low_point')}  awl_low_point={lc.get('awl_low_point')}\n"
-            f"  approx_lcp_location={lc.get('approx_lcp_location')}  approx_rcp_location={lc.get('approx_rcp_location')}\n"
+            f"  awr_low_point={_fmt_float(lc.get('awr_low_point'))}  awl_low_point={_fmt_float(lc.get('awl_low_point'))}\n"
+            f"  approx_lcp_location={_fmt_float(lc.get('approx_lcp_location'))}  "
+            f"approx_rcp_location={_fmt_float(lc.get('approx_rcp_location'))}\n"
             f"  wheel_data (gates):\n{_format_wheel_data(lc)}\n\n"
             "Edit configuration?\n"
-            "  1) Yes\n"
-            "  2) No (return)\n"
         )
         return {
             "id": "config.edit",
@@ -880,11 +911,11 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     if step == 1:
         return {"id":"config.wheels","kind":"int","text":"Number of wheels", "default": int(work.get("wheels", lc["wheels"]))}
     if step == 2:
-        return {"id":"config.dial_min","kind":"float","text":"Dial minimum value", "default": float(work.get("dial_min", lc["dial_min"]))}
+        return {"id":"config.dial_min","kind":"float","text":"Dial minimum value", "default": _fmt_float(work.get("dial_min", lc["dial_min"]))}
     if step == 3:
-        return {"id":"config.dial_max","kind":"float","text":"Dial maximum value", "default": float(work.get("dial_max", lc["dial_max"]))}
+        return {"id":"config.dial_max","kind":"float","text":"Dial maximum value", "default": _fmt_float(work.get("dial_max", lc["dial_max"]))}
     if step == 4:
-        return {"id":"config.tolerance","kind":"float","text":"Lock tolerance (±)", "default": float(work.get("tolerance", lc["tolerance"]))}
+        return {"id":"config.tolerance","kind":"float","text":"Lock tolerance (±)", "default": _fmt_float(work.get("tolerance", lc["tolerance"]))}
     if step == 5:
         cur = str(work.get("turn_sequence", lc["turn_sequence"])).strip().upper()
         opts = ["LRL", "RLR"]
@@ -987,19 +1018,19 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
 
     if step == 11:
         cur = work.get("awr_low_point", lc.get("awr_low_point"))
-        default = "" if cur is None else float(cur)
+        default = "" if cur is None else _fmt_float(cur)
         return {"id":"config.awr_low_point","kind":"text","text":"AWR low point (number; '-' to clear; Enter to keep)", "default": default}
     if step == 12:
         cur = work.get("awl_low_point", lc.get("awl_low_point"))
-        default = "" if cur is None else float(cur)
+        default = "" if cur is None else _fmt_float(cur)
         return {"id":"config.awl_low_point","kind":"text","text":"AWL low point (number; '-' to clear; Enter to keep)", "default": default}
     if step == 13:
         cur = work.get("approx_lcp_location", lc.get("approx_lcp_location"))
-        default = "" if cur is None else float(cur)
+        default = "" if cur is None else _fmt_float(cur)
         return {"id":"config.approx_lcp_location","kind":"text","text":"Approx LCP location (number; '-' to clear; Enter to keep)", "default": default}
     if step == 14:
         cur = work.get("approx_rcp_location", lc.get("approx_rcp_location"))
-        default = "" if cur is None else float(cur)
+        default = "" if cur is None else _fmt_float(cur)
         return {"id":"config.approx_rcp_location","kind":"text","text":"Approx RCP location (number; '-' to clear; Enter to keep)", "default": default}
 
 
@@ -1007,15 +1038,15 @@ def _prompt_configure_lock(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     if step == 17:
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {}).get(str(w), {})
-        return {"id":"config.gates.known","kind":"csv_floats","text":f"Wheel {w} KNOWN gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(str(x) for x in wd.get("known_gates", []))}
+        return {"id":"config.gates.known","kind":"csv_floats","text":f"Wheel {w} KNOWN gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(_fmt_float(x) for x in wd.get("known_gates", []))}
     if step == 18:
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {}).get(str(w), {})
-        return {"id":"config.gates.suspected","kind":"csv_floats","text":f"Wheel {w} SUSPECTED gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(str(x) for x in wd.get("suspected_gates", []))}
+        return {"id":"config.gates.suspected","kind":"csv_floats","text":f"Wheel {w} SUSPECTED gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(_fmt_float(x) for x in wd.get("suspected_gates", []))}
     if step == 19:
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {}).get(str(w), {})
-        return {"id":"config.gates.false","kind":"csv_floats","text":f"Wheel {w} FALSE gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(str(x) for x in wd.get("false_gates", []))}
+        return {"id":"config.gates.false","kind":"csv_floats","text":f"Wheel {w} FALSE gates (comma-separated; Enter=keep; '-'=clear)", "default": ",".join(_fmt_float(x) for x in wd.get("false_gates", []))}
 
     # Safety fallback (should not happen)
     return {"id":"config.invalid","kind":"message","text":"[Error] Invalid configuration step."}
@@ -1206,42 +1237,75 @@ def _prompt_find_awl(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         return {"id":"awl.unsupported","kind":"confirm","text":"Find AWL is implemented for 3-wheel LRL locks. Press Enter to return."}
 
     dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+
+    if ctx.get("n_points") is None:
+        ctx["step"] = "ask_points"
+        return {"id":"awl.points","kind":"int","text":"How many checkpoints to test? (1..36000)","default":10}
     checkpoints = ctx.get("checkpoints")
     if not isinstance(checkpoints, list):
-        checkpoints = build_checkpoints(dial_min, dial_max)
+        checkpoints = build_checkpoints(dial_min, dial_max, n_points=int(ctx.get('n_points',10) or 10))
         ctx["checkpoints"] = checkpoints
         ctx["idx"] = 0
         ctx["readings"] = []
         ctx["step"] = "intro"
 
     step = ctx.get("step","intro")
+
+    if step == "manual":
+        return {"id":"awl.manual","kind":"float","text":"Enter the value to save:"}
+
     if step == "intro":
-        cps = "\n".join([f"  {i+1:>2}) {c}" for i,c in enumerate(checkpoints)])
-        return {"id":"awl.intro","kind":"confirm","text":f"Find AWL Low Point (10 checkpoints)\nCheckpoints:\n{cps}\n\nPress Enter to start."}
+        cps = "\n".join([f"  {i+1:>2}) {_fmt_float(c)}" for i,c in enumerate(checkpoints)])
+        return {"id":"awl.intro","kind":"confirm","text":f"Find AWL Low Point\nCheckpoints:\n{cps}\n\nTurn dial left (CCW) until you pass 0 three times, and stop on 0 when you reach it the fourth time.\nPress Enter to start."}
 
     idx = int(ctx.get("idx",0) or 0)
     if idx < len(checkpoints):
         cp = checkpoints[idx]
-        return {"id":"awl.lcp","kind":"float","text":f"Checkpoint {idx+1}/{len(checkpoints)} @ {cp}: Enter LCP"}
+        return {"id":"awl.lcp","kind":"float","text":f"Checkpoint {idx+1}/{len(checkpoints)}:\nTurn dial left (CCW) to {_fmt_float(cp)}\nThen turn dial right (CW) until you reach the RCP. Enter RCP"}
     # done -> confirm save
     readings = ctx.get("readings", [])
     best = max(readings, key=lambda d: d["lcp"]) if readings else None
     if best is None:
         return {"id":"awl.done","kind":"confirm","text":"No readings collected. Press Enter to return."}
-    lines = "\n".join([f"  {r['checkpoint']}: LCP={r['lcp']}" for r in readings])
+    lines = "\n".join([f"  {_fmt_float(r['checkpoint'])}: LCP={_fmt_float(r['lcp'])}" for r in readings])
     return {
         "id":"awl.save",
         "kind":"choice",
-        "text": f"RESULTS\n{lines}\n\nHighest LCP at checkpoint {best['checkpoint']} (LCP={best['lcp']}).\nSave as AWL low point?\n  1) Yes\n  2) No\n",
-        "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}],
+        "text": f"RESULTS\n{lines}\n\nHighest LCP at checkpoint {_fmt_float(best['checkpoint'])} (LCP={_fmt_float(best['lcp'])}).\nSave as AWL low point?\n",
+        "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"},{"key":"3","label":"Enter manually"}],
     }
 
 
 def _apply_find_awl(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+
+    if prompt.get("id") == "awl.manual":
+        try:
+            v = float(parsed)
+        except Exception:
+            return False, "Enter a numeric value."
+        lc = dict(session["state"]["lock_config"])
+        lc["awl_low_point"] = float(v)
+        session["state"]["lock_config"] = normalize_lock_config(lc)
+        session["dirty"] = True
+        _pop(session)
+        return True, None
+
     if prompt.get("id") == "awl.unsupported":
         _pop(session)
         return True, None
 
+
+    if prompt.get("id") == "awl.points":
+        try:
+            n = int(parsed)
+        except Exception:
+            n = 10
+        if n < 1 or n > 36000:
+            return False, "Enter an integer from 1 to 36000."
+        ctx["n_points"] = n
+        ctx.pop("checkpoints", None)
+        ctx["step"] = "intro"
+        return True, None
     step = ctx.get("step","intro")
     if step == "intro":
         ctx["step"] = "scan"
@@ -1260,6 +1324,11 @@ def _apply_find_awl(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         return True, None
 
     if prompt.get("id") == "awl.save":
+
+        if parsed == "3":
+            ctx["step"] = "manual"
+            return True, None
+
         if parsed == "1":
             readings = ctx.get("readings", [])
             best = max(readings, key=lambda d: d["lcp"]) if readings else None
@@ -1284,40 +1353,73 @@ def _prompt_find_awr(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         return {"id":"awr.unsupported","kind":"confirm","text":"Find AWR is implemented for 3-wheel LRL locks. Press Enter to return."}
 
     dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+
+    if ctx.get("n_points") is None:
+        ctx["step"] = "ask_points"
+        return {"id":"awr.points","kind":"int","text":"How many checkpoints to test? (1..36000)","default":10}
     checkpoints = ctx.get("checkpoints")
     if not isinstance(checkpoints, list):
-        checkpoints = build_checkpoints(dial_min, dial_max)
+        checkpoints = build_checkpoints(dial_min, dial_max, n_points=int(ctx.get('n_points',10) or 10))
         ctx["checkpoints"] = checkpoints
         ctx["idx"] = 0
         ctx["readings"] = []
         ctx["step"] = "intro"
 
     step = ctx.get("step","intro")
+
+    if step == "manual":
+        return {"id":"awr.manual","kind":"float","text":"Enter the value to save:"}
+
     if step == "intro":
-        cps = "\n".join([f"  {i+1:>2}) {c}" for i,c in enumerate(checkpoints)])
-        return {"id":"awr.intro","kind":"confirm","text":f"Find AWR Low Point (10 checkpoints)\nCheckpoints:\n{cps}\n\nPress Enter to start."}
+        cps = "\n".join([f"  {i+1:>2}) {_fmt_float(c)}" for i,c in enumerate(checkpoints)])
+        return {"id":"awr.intro","kind":"confirm","text":f"Find AWR Low Point\nCheckpoints:\n{cps}\n\nTurn dial right (CW) until you pass 0 three times, and stop on 0 when you reach it the fourth time.\nPress Enter to start."}
 
     idx = int(ctx.get("idx",0) or 0)
     if idx < len(checkpoints):
         cp = checkpoints[idx]
-        return {"id":"awr.rcp","kind":"float","text":f"Checkpoint {idx+1}/{len(checkpoints)} @ {cp}: Enter RCP"}
+        return {"id":"awr.rcp","kind":"float","text":f"Checkpoint {idx+1}/{len(checkpoints)}:\nTurn dial right (CW) to {_fmt_float(cp)}\nThen turn dial left (CCW) until you reach the RCP. Enter RCP"}
 
     readings = ctx.get("readings", [])
     best = min(readings, key=lambda d: d["rcp"]) if readings else None
     if best is None:
         return {"id":"awr.done","kind":"confirm","text":"No readings collected. Press Enter to return."}
-    lines = "\n".join([f"  {r['checkpoint']}: RCP={r['rcp']}" for r in readings])
+    lines = "\n".join([f"  {_fmt_float(r['checkpoint'])}: RCP={_fmt_float(r['rcp'])}" for r in readings])
     return {
         "id":"awr.save",
         "kind":"choice",
-        "text": f"RESULTS\n{lines}\n\nSmallest RCP at checkpoint {best['checkpoint']} (RCP={best['rcp']}).\nSave as AWR low point?\n  1) Yes\n  2) No\n",
-        "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}],
+        "text": f"RESULTS\n{lines}\n\nSmallest RCP at checkpoint {_fmt_float(best['checkpoint'])} (RCP={_fmt_float(best['rcp'])}).\nSave as AWR low point?\n",
+        "choices":[{"key":"1","label":"Yes"},{"key":"2","label":"No"},{"key":"3","label":"Enter manually"}],
     }
 
 
 def _apply_find_awr(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+
+    if prompt.get("id") == "awr.manual":
+        try:
+            v = float(parsed)
+        except Exception:
+            return False, "Enter a numeric value."
+        lc = dict(session["state"]["lock_config"])
+        lc["awr_low_point"] = float(v)
+        session["state"]["lock_config"] = normalize_lock_config(lc)
+        session["dirty"] = True
+        _pop(session)
+        return True, None
+
     if prompt.get("id") == "awr.unsupported":
         _pop(session)
+        return True, None
+
+    if prompt.get("id") == "awr.points":
+        try:
+            n = int(parsed)
+        except Exception:
+            n = 10
+        if n < 1 or n > 36000:
+            return False, "Enter an integer from 1 to 36000."
+        ctx["n_points"] = n
+        ctx.pop("checkpoints", None)
+        ctx["step"] = "intro"
         return True, None
 
     step = ctx.get("step","intro")
@@ -1338,6 +1440,11 @@ def _apply_find_awr(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         return True, None
 
     if prompt.get("id") == "awr.save":
+
+        if parsed == "3":
+            ctx["step"] = "manual"
+            return True, None
+
         if parsed == "1":
             readings = ctx.get("readings", [])
             best = min(readings, key=lambda d: d["rcp"]) if readings else None
@@ -1401,9 +1508,9 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
     if phase == "intro":
         return {"id":"iso3.intro","kind":"confirm",
                 "text":(
-                    f"Isolate Wheel 3 (scan step={scan_step})\n"
+                    f"Isolate Wheel 3 (scan step={_fmt_float(scan_step)})\n"
                     f"Start at 0, turn right 3 full turns, return to 0.\n"
-                    f"Continue right to AWR low point ({awr}).\n\n"
+                    f"Continue right to AWR low point ({_fmt_float(awr)}).\n\n"
                     f"Press Enter to begin scan ({len(ctx['scan_points'])} points)."
                 )}
 
@@ -1416,15 +1523,15 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         p = float(pts[i])
         return {"id":"iso3.scan.lcp","kind":"float",
                 "text":(
-                    f"Scan {i+1}/{len(pts)} @ Wheel 3 = {p}\n"
-                    f"Turn left (CCW) to {p}. Enter LCP"
+                    f"Scan {i+1}/{len(pts)} @ Wheel 3 = {_fmt_float(p)}\n"
+                    f"Turn left (CCW) to {_fmt_float(p)}. Enter LCP"
                 )}
 
     if phase == "scan_rcp":
         i = int(ctx.get("i",0) or 0)
         p = float(ctx.get("current_p"))
         return {"id":"iso3.scan.rcp","kind":"float",
-                "text":f"Scan {i+1}/{len(ctx['scan_points'])} @ Wheel 3 = {p}\nEnter RCP"}
+                "text":f"Scan {i+1}/{len(ctx['scan_points'])} @ Wheel 3 = {_fmt_float(p)}\nEnter RCP"}
 
     if phase == "candidates":
         return {"id":"iso3.candidates","kind":"csv_floats",
@@ -1437,7 +1544,7 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 "text":(
                     f"Refinement: {len(refine_points)} points (gate-1, gate, gate+1).\n"
                     f"Start at 0, turn right 3 full turns, return to 0.\n"
-                    f"Continue right to AWR low point ({awr}).\n\n"
+                    f"Continue right to AWR low point ({_fmt_float(awr)}).\n\n"
                     f"Press Enter to begin refinement."
                 )}
 
@@ -1449,13 +1556,13 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
             return _prompt_isolate_wheel_3(session, ctx)
         p = float(rps[j])
         return {"id":"iso3.refine.lcp","kind":"float",
-                "text":f"Refine {j+1}/{len(rps)} @ Wheel 3 = {p}\nTurn left (CCW) to {p}. Enter LCP"}
+                "text":f"Refine {j+1}/{len(rps)} @ Wheel 3 = {_fmt_float(p)}\nTurn left (CCW) to {_fmt_float(p)}. Enter LCP"}
 
     if phase == "refine_rcp":
         j = int(ctx.get("j",0) or 0)
         p = float(ctx.get("current_p"))
         return {"id":"iso3.refine.rcp","kind":"float",
-                "text":f"Refine {j+1}/{len(ctx.get('refine_points',[]))} @ Wheel 3 = {p}\nEnter RCP"}
+                "text":f"Refine {j+1}/{len(ctx.get('refine_points',[]))} @ Wheel 3 = {_fmt_float(p)}\nEnter RCP"}
 
     if phase == "finish":
         sweep_id = ctx["sweep_id"]
@@ -1640,7 +1747,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         src = ctx.get("wheel_1_stop_src","")
         if s is None:
             return {"id":"iso2.w1.manual","kind":"float","text":"Wheel 1 stop is required. Enter Wheel 1 stop"}
-        return {"id":"iso2.w1.confirm","kind":"float","text":f"Wheel 1 stop suggested = {s} ({src}). Enter to accept or type new", "default": float(s)}
+        return {"id":"iso2.w1.confirm","kind":"float","text":f"Wheel 1 stop suggested = {_fmt_float(s)} ({src}). Enter to accept or type new", "default": _fmt_float(s)}
 
     if phase == "confirm_w3":
         s = ctx.get("wheel_3_stop_suggest")
@@ -1651,23 +1758,23 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
             note = " (No known/suspected gate; consider isolating wheel 3 first.)"
         if s is None:
             return {"id":"iso2.w3.manual","kind":"float","text":f"Wheel 3 stop is required.{note} Enter Wheel 3 stop"}
-        return {"id":"iso2.w3.confirm","kind":"float","text":f"Wheel 3 stop suggested = {s} ({src}).{note} Enter to accept or type new", "default": float(s)}
+        return {"id":"iso2.w3.confirm","kind":"float","text":f"Wheel 3 stop suggested = {_fmt_float(s)} ({src}).{note} Enter to accept or type new", "default": _fmt_float(s)}
 
     if phase == "intro":
         w1 = ctx["wheel_1_stop"]; w3 = ctx["wheel_3_stop"]
         return {"id":"iso2.intro","kind":"confirm",
                 "text":(
                     f"Isolate Wheel 2\n"
-                    f"Chosen stops: wheel1={w1}, wheel3={w3}\n"
-                    f"Tolerance=±{tol} (step size={step_size})\n"
-                    f"Dial range={dial_min}..{dial_max}\n\n"
+                    f"Chosen stops: wheel1={_fmt_float(w1)}, wheel3={_fmt_float(w3)}\n"
+                    f"Tolerance=±{_fmt_float(tol)} (step size={_fmt_float(step_size)})\n"
+                    f"Dial range={_fmt_float(dial_min)}..{_fmt_float(dial_max)}\n\n"
                     f"Press Enter to start."
                 )}
 
     if phase == "setup_left":
         w1 = ctx["wheel_1_stop"]
         return {"id":"iso2.step2","kind":"confirm",
-                "text":f"Turn left (CCW) passing {w1} three times, continue until you hit {w1}, then stop. Press Enter."}
+                "text":f"Turn left (CCW) passing {_fmt_float(w1)} three times, continue until you hit {_fmt_float(w1)}, then stop. Press Enter."}
 
     if phase == "setup_right":
         w1 = ctx["wheel_1_stop"]
@@ -1675,7 +1782,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         offset = wrap_dial(w1 - (n * step_size), dial_min, dial_max)
         ctx["offset"] = offset
         return {"id":"iso2.step3","kind":"confirm",
-                "text":f"Turn right (CW) passing {w1} two times, continue slowly until you hit {offset}, then stop. Press Enter."}
+                "text":f"Turn right (CW) passing {_fmt_float(w1)} two times, continue slowly until you hit {_fmt_float(offset)}, then stop. Press Enter."}
 
     if phase == "scan_lcp":
         cycle = int(ctx.get("cycle",1) or 1)
@@ -1697,7 +1804,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         return {"id":"iso2.scan.lcp","kind":"float",
                 "text":(
                     f"Cycle {cycle}\n"
-                    f"Turn left (CCW) passing {offset} one time, continue until you hit {w3}, then stop.\n"
+                    f"Turn left (CCW) passing {_fmt_float(offset)} one time, continue until you hit {_fmt_float(w3)}, then stop.\n"
                     f"Turn right (CW) until you hit LCP. Enter LCP"
                 )}
 
@@ -1715,7 +1822,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         if not candidates:
             return {"id":"iso2.no_candidates","kind":"confirm",
                     "text":"No clear candidates detected. Press Enter to return."}
-        lines = "\n".join([f"  {c}" for c in candidates])
+        lines = "\n".join([f"  {_fmt_float(c)}" for c in candidates])
         return {"id":"iso2.select_candidates","kind":"csv_floats",
                 "text":f"Auto-detected candidates:\n{lines}\n\nEnter candidates to refine (comma-separated). Empty = use all.",
                 "default": ""}
@@ -1735,10 +1842,10 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         w1 = float(ctx["wheel_1_stop"]); w3 = float(ctx["wheel_3_stop"])
         return {"id":"iso2.refine.lcp","kind":"float",
                 "text":(
-                    f"Refine {i+1}/{len(rps)} @ Wheel 2 = {p}\n"
-                    f"Turn left (CCW) passing {w1} three times, stop on {w1}.\n"
-                    f"Turn right (CW) passing {w1} two times, stop on {p}.\n"
-                    f"Turn left (CCW) passing {p} one time, stop on {w3}.\n"
+                    f"Refine {i+1}/{len(rps)} @ Wheel 2 = {_fmt_float(p)}\n"
+                    f"Turn left (CCW) passing {_fmt_float(w1)} three times, stop on {_fmt_float(w1)}.\n"
+                    f"Turn right (CW) passing {_fmt_float(w1)} two times, stop on {_fmt_float(p)}.\n"
+                    f"Turn left (CCW) passing {_fmt_float(p)} one time, stop on {_fmt_float(w3)}.\n"
                     f"Turn right (CW) until you hit LCP. Enter LCP"
                 )}
 
@@ -1746,7 +1853,7 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         i = int(ctx.get("ri",0) or 0)
         p = float(ctx.get("current_p"))
         return {"id":"iso2.refine.rcp","kind":"float",
-                "text":f"Refine {i+1}/{len(ctx.get('refine_points',[]))} @ Wheel 2 = {p}\nTurn left (CCW) until you hit RCP. Enter RCP"}
+                "text":f"Refine {i+1}/{len(ctx.get('refine_points',[]))} @ Wheel 2 = {_fmt_float(p)}\nTurn left (CCW) until you hit RCP. Enter RCP"}
 
     if phase == "finish":
         sweep_id = int(ctx.get("sweep_id"))
@@ -2041,7 +2148,7 @@ def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         "id":"enumall.result",
         "kind":"choice",
         "text":(
-            f"Try combination: {combo}\n"
+            f"Try combination: {_fmt_float_tuple(list(combo))}\n"
             f"Enter result:\n"
             f"  0) Closed (record attempt)\n"
             f"  1) Opened (SUCCESS and stop)\n"
@@ -2137,7 +2244,7 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "id":"enumw.result",
             "kind":"choice",
             "text":(
-                f"Try combination (wheel {w} varied): {tuple(combo)}\n"
+                f"Try combination (wheel {w} varied): {_fmt_float_tuple(combo)}\n"
                 f"Enter result:\n"
                 f"  0) Closed (record attempt)\n"
                 f"  1) Opened (SUCCESS and stop)\n"
@@ -2442,7 +2549,14 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         known = wd.get("known_gates", []) or []
         suspected = wd.get("suspected_gates", []) or []
         using = _tutorial_effective_candidates(lc, w)
-        lines.append(f"  Wheel {w}: known={known} | suspected={suspected} | using={using}")
+        lines.append(
+            "  Wheel {w}: known={known} | suspected={suspected} | using={using}".format(
+                w=w,
+                known=_fmt_float_list(known),
+                suspected=_fmt_float_list(suspected),
+                using=_fmt_float_list(using),
+            )
+        )
 
     action_kind, detail, label = _tutorial_decide(lc)
     ctx["action_kind"] = action_kind
