@@ -409,16 +409,44 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
     frame = data["runtime"]["stack"][-1]
     ctx = frame.get("ctx", {}) or {}
 
+    def _confirm_plot_path(out_path: Path) -> Optional[Path]:
+        if not out_path.exists():
+            return out_path
+        print(f"[Plot exists] {out_path}")
+        print("  1) Overwrite")
+        print("  2) Save with new name")
+        print("  3) Cancel")
+        choice = input("Choose an option: ").strip()
+        if choice == "1":
+            return out_path
+        if choice == "2":
+            new_name = input("Enter new filename (with .png): ").strip()
+            if not new_name:
+                ctx["_skip_plot_once"] = True
+                return None
+            return out_path.parent / new_name
+        ctx["_skip_plot_once"] = True
+        return None
+
     try:
-        if pid in ("iso2.candidates", "iso3.candidates"):
+        if ctx.pop("_skip_plot_once", False):
+            return
+        if pid in ("iso2.candidates", "iso3.candidates", "iso3.plot", "iso3.post_refine.plot"):
             sweep_id = int(ctx.get("sweep_id"))
             wheel_swept = int(ctx.get("wheel_swept", 0) or 0)
-            rows = ctx.get("rows", []) or []
+            rows = ctx.get("rows", []) or ctx.get("scan_rows", []) or []
             out_path = _plot_output_path(session_path, "sweep", sweep_id)
+            out_path = _confirm_plot_path(out_path)
+            if out_path is None:
+                return
             _plot_sweep_png(rows, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            print(f"[Plot saved] {out_path}")
+            print("Press Enter to continue.")
             return
 
         if pid in ("iso2.finish", "iso3.finish", "plot_sweep.generate"):
+            if pid == "iso3.finish" and ctx.pop("_skip_finish_plot_once", False):
+                return
             sweep_id = int(ctx.get("sweep_id"))
             wheel_swept = int(ctx.get("wheel_swept", 0) or 0)
             ms = [
@@ -426,15 +454,26 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
                 if str(m.get("sweep", "")).replace(".", "", 1).isdigit() and int(float(m.get("sweep"))) == sweep_id
             ]
             out_path = _plot_output_path(session_path, "sweep", sweep_id)
+            out_path = _confirm_plot_path(out_path)
+            if out_path is None:
+                return
             _plot_sweep_png(ms, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            print(f"[Plot saved] {out_path}")
+            print("Press Enter to continue.")
             return
 
         if pid == "plot_high_low.generate":
             test_id = int(ctx.get("test_id"))
             out_path = _plot_output_path(session_path, "highlow", test_id)
+            out_path = _confirm_plot_path(out_path)
+            if out_path is None:
+                return
             _plot_high_low_png(data["state"]["measurements"], test_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            print(f"[Plot saved] {out_path}")
+            print("Press Enter to continue.")
             return
-    except Exception:
+    except Exception as e:
+        print(f"[Plot error] {e}")
         return
 
 

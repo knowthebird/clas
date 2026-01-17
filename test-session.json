@@ -1,0 +1,182 @@
+{
+  "version": "0.2.1",
+  "meta": {
+    "session_name": "test-session",
+    "last_saved_cursor": 25
+  },
+  "state": {
+    "lock_config": {
+      "wheels": 3,
+      "dial_min": 0.0,
+      "dial_max": 99.0,
+      "tolerance": 2.0,
+      "turn_sequence": "LRL",
+      "flies": "moveable",
+      "make": "Sophie's Sim",
+      "fence_type": "SPRING_LEVER",
+      "ul": "2",
+      "oval_wheels": "NO",
+      "awl_low_point": null,
+      "awr_low_point": 90.0,
+      "approx_lcp_location": null,
+      "approx_rcp_location": null,
+      "wheel_data": {
+        "1": {
+          "known_gates": [],
+          "suspected_gates": [],
+          "false_gates": []
+        },
+        "2": {
+          "known_gates": [],
+          "suspected_gates": [],
+          "false_gates": []
+        },
+        "3": {
+          "known_gates": [],
+          "suspected_gates": [],
+          "false_gates": []
+        }
+      }
+    },
+    "measurements": [],
+    "metadata": {
+      "float_display_precision": 2
+    }
+  },
+  "runtime": {
+    "stack": [
+      {
+        "screen": "main_menu",
+        "ctx": {}
+      }
+    ]
+  },
+  "history": [
+    {
+      "type": "input",
+      "text": "1",
+      "prompt_id": "main.menu"
+    },
+    {
+      "type": "input",
+      "text": "1",
+      "prompt_id": "config.edit"
+    },
+    {
+      "type": "input",
+      "text": "Sophie's Sim",
+      "prompt_id": "config.make"
+    },
+    {
+      "type": "input",
+      "text": "1",
+      "prompt_id": "config.ul"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.wheels"
+    },
+    {
+      "type": "input",
+      "text": "3",
+      "prompt_id": "config.fence_type"
+    },
+    {
+      "type": "input",
+      "text": "1",
+      "prompt_id": "config.turn_sequence"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.dial_min"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.dial_max"
+    },
+    {
+      "type": "input",
+      "text": "2",
+      "prompt_id": "config.flies"
+    },
+    {
+      "type": "input",
+      "text": "2",
+      "prompt_id": "config.tolerance"
+    },
+    {
+      "type": "input",
+      "text": "3",
+      "prompt_id": "config.oval_wheels"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.awl_low_point"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.awr_low_point"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.approx_lcp_location"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.approx_rcp_location"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.known"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.suspected"
+    },
+    {
+      "type": "input",
+      "text": "",
+      "prompt_id": "config.gates.false"
+    }
+  ],
+  "cursor": 25
+}
