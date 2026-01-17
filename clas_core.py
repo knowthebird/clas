@@ -68,7 +68,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.1"
+CLAS_CORE_VERSION = "0.2.2"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------

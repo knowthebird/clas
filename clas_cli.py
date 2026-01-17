@@ -587,6 +587,7 @@ def _select_session_interactive(folder: Path) -> tuple[Path, Optional[Path], Dic
                 print("That session already exists.")
                 continue
             sess = core.new_session(name)
+            sess.setdefault("meta", {})["show_splash"] = True
             sess = core.normalize_session(sess)
             sess = core.rebuild(sess)
             recovery_path = _make_recovery_path(session_path)
@@ -626,6 +627,17 @@ def _render_prompt(prompt: Dict[str, Any], last_error: Optional[str]) -> None:
     help_text = prompt.get("help")
     if help_text:
         print(f"\n({help_text})")
+
+
+def _show_first_time_splash() -> None:
+    print("\nWelcome to CLAS.")
+    print("Global commands are available at any time:")
+    print("  (s)ave session to a JSON file")
+    print("  (u)ndo the last command or value you entered")
+    print("  (a)bort the current workflow")
+    print("  (q)uit the program")
+    print("\nTutorial and Learn more resources are available for help.")
+    input("\nPress Enter to continue.")
 
 
 def _read_user_input(prompt: Dict[str, Any]) -> str:
@@ -690,6 +702,10 @@ def run_cli(session_path: Optional[str] = None) -> None:
 
     # Immediately write initial recovery mirror
     _write_json_atomic(recovery_path_p, data)
+
+    if data.get("meta", {}).pop("show_splash", False):
+        _show_first_time_splash()
+        _write_json_atomic(recovery_path_p, data)
 
     try:
         while True:
