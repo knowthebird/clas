@@ -461,7 +461,7 @@ def get_prompt(session: Session) -> PromptSpec:
     ctx = frame["ctx"]
 
     # universal hint (adapters can choose to show elsewhere)
-    hint = "Commands: s=save, u=undo, a=abort, q=quit"
+    hint = "Global commands: s=save, u=undo, a=abort, q=quit"
 
     if screen == "main_menu":
         return {
@@ -1589,8 +1589,20 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
     if int(lc.get("wheels", 0) or 0) != 3 or str(lc.get("turn_sequence","")).upper() != "LRL":
         return {"id":"iso3.unsupported","kind":"confirm","text":"Isolate wheel 3 is implemented for 3-wheel LRL locks. Press Enter to return."}
 
+    if ctx.get("phase") == "manual_awr":
+        return {"id":"iso3.set_awr","kind":"float","text":"Enter AWR low point"}
+
     if lc.get("awr_low_point") is None:
-        return {"id":"iso3.need_awr","kind":"confirm","text":"AWR low point is not set. Run 'Find AWR low point' first. Press Enter to return."}
+        return {
+            "id":"iso3.need_awr",
+            "kind":"choice",
+            "text":"AWR low point is not set.",
+            "choices": [
+                {"key":"1","label":"Find AWR low point (guided)"},
+                {"key":"2","label":"Manually Enter Starting Low Point"},
+                {"key":"3","label":"Return"},
+            ],
+        }
 
     dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
     tol = float(lc["tolerance"]); scan_step = max(1e-9, tol * 2.0)
@@ -1700,8 +1712,24 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
 
 def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
     pid = prompt.get("id","")
-    if pid in ("iso3.unsupported","iso3.need_awr","iso3.unknown"):
+    if pid in ("iso3.unsupported","iso3.unknown"):
         _pop(session); return True, None
+    if pid == "iso3.need_awr":
+        choice = str(parsed)
+        if choice == "1":
+            ctx.clear()
+            _push(session, "find_awr", {})
+            return True, None
+        if choice == "2":
+            ctx["phase"] = "manual_awr"
+            return True, None
+        _pop(session)
+        return True, None
+    if pid == "iso3.set_awr":
+        lc = session["state"]["lock_config"]
+        lc["awr_low_point"] = float(parsed)
+        ctx.clear()
+        return True, None
 
     lc = session["state"]["lock_config"]
     dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
@@ -2649,6 +2677,31 @@ def _tutorial_decide(lc: Dict[str, Any]) -> Tuple[str, Optional[int], str]:
     return ("ENUM_WHEEL", detail, f"Exhaustive Enumeration for Wheel {detail}")
 
 
+def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int], str]]:
+    actions: List[Tuple[str, Optional[int], str]] = []
+    if lc.get("awr_low_point") is None:
+        actions.append(("FIND_AWR", None, "Find the All Wheels Right (AWR) low point"))
+    if lc.get("awl_low_point") is None:
+        actions.append(("FIND_AWL", None, "Find the All Wheels Left (AWL) low point"))
+    wks = _tutorial_wheels_with_known_or_suspected(lc)
+    if len(wks) == 0:
+        actions.append(("ISOLATE_WHEEL_3", None, "Isolate Wheel 3"))
+        actions.append(("ISOLATE_WHEEL_2", None, "Isolate Wheel 2"))
+        actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
+    elif len(wks) == 1:
+        if wks[0] == 3:
+            actions.append(("ISOLATE_WHEEL_2", None, "Isolate Wheel 2"))
+        else:
+            actions.append(("ISOLATE_WHEEL_3", None, "Isolate Wheel 3"))
+        actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
+    elif len(wks) == 2:
+        missing = [w for w in (1, 2, 3) if w not in wks][0]
+        actions.append(("ENUM_WHEEL", missing, f"Exhaustive Enumeration for Wheel {missing}"))
+    else:
+        actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
+    return actions
+
+
 def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     lc = session["state"]["lock_config"]
     wheels = int(lc.get("wheels", 0) or 0)
@@ -2660,11 +2713,32 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "text": "Tutorial is only implemented for 3-wheel LRL locks at this time.\nPress Enter to return.",
         }
 
-    phase = str(ctx.get("phase", "show") or "show")
     step = int(ctx.get("step", 1) or 1)
+    actions = _tutorial_plan_actions(lc)
+    total_steps = len(actions) if actions else step
+    if ctx.pop("advance_step", False):
+        step = min(step + 1, total_steps) if actions else step + 1
+    if actions:
+        step = min(step, total_steps)
+    ctx["step"] = step
 
     lines: List[str] = []
-    lines.append(f"Step {step} — Current effective gate knowledge:")
+    lines.append(f"Step {step} of {total_steps} — Current lock knowledge:")
+    lines.append("Lock configuration:")
+    lines.append(f"  Wheels: {lc.get('wheels')}")
+    lines.append(f"  Dial range: {_fmt_float(lc.get('dial_min'))}..{_fmt_float(lc.get('dial_max'))}")
+    lines.append(f"  Tolerance: ±{_fmt_float(lc.get('tolerance'))}")
+    lines.append(f"  Turn sequence: {lc.get('turn_sequence')}")
+    lines.append(f"  Flies: {lc.get('flies')}")
+    lines.append(f"  Make: {lc.get('make')}")
+    lines.append(f"  Fence type: {lc.get('fence_type')}")
+    lines.append(f"  UL: {lc.get('ul')}")
+    lines.append(f"  Oval wheels: {lc.get('oval_wheels')}")
+    lines.append(f"  AWL low point: {_fmt_float(lc.get('awl_low_point'))}")
+    lines.append(f"  AWR low point: {_fmt_float(lc.get('awr_low_point'))}")
+    lines.append(f"  Approx LCP: {_fmt_float(lc.get('approx_lcp_location'))}")
+    lines.append(f"  Approx RCP: {_fmt_float(lc.get('approx_rcp_location'))}")
+    lines.append("Gate knowledge:")
     for w in (1, 2, 3):
         wd = (lc.get("wheel_data", {}) or {}).get(str(w), {}) or {}
         known = wd.get("known_gates", []) or []
@@ -2679,34 +2753,30 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             )
         )
 
-    action_kind, detail, label = _tutorial_decide(lc)
+    if actions:
+        action_kind, detail, label = actions[max(0, step - 1)]
+    else:
+        action_kind, detail, label = _tutorial_decide(lc)
     ctx["action_kind"] = action_kind
     ctx["action_detail"] = detail
     ctx["action_label"] = label
-
-    if phase == "try":
-        return {
-            "id": "tutorial.try",
-            "kind": "bool_yn",
-            "text": "Try suggested action now? (y/n):",
-            "default": "n",
-        }
-
-    if phase == "post":
-        return {
-            "id": "tutorial.post",
-            "kind": "confirm",
-            "text": "Press Enter to continue, or type A to abort tutorial.",
-        }
 
     text = (
         "Tutorial\n\n"
         + "\n".join(lines)
         + "\n\nSuggested action:\n  → "
         + label
-        + "\n\nPress Enter to continue, or type A to abort tutorial."
     )
-    return {"id": "tutorial.show", "kind": "confirm", "text": text}
+    return {
+        "id": "tutorial.show",
+        "kind": "choice",
+        "text": text,
+        "choices": [
+            {"key": "1", "label": "Try suggested action"},
+            {"key": "2", "label": "Skip this suggestion"},
+            {"key": "3", "label": "Return (Exit Tutorial)"},
+        ],
+    }
 
 
 def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
@@ -2716,31 +2786,27 @@ def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         return True, None
 
     if pid == "tutorial.show":
-        ctx["phase"] = "try"
-        return True, None
-
-    if pid == "tutorial.try":
-        if bool(parsed):
-            kind = str(ctx.get("action_kind", ""))
-            detail = ctx.get("action_detail", None)
-            if kind == "FIND_AWR":
-                _push(session, "find_awr", {})
-            elif kind == "FIND_AWL":
-                _push(session, "find_awl", {})
-            elif kind == "ISOLATE_WHEEL_3":
-                _push(session, "isolate_wheel_3", {})
-            elif kind == "ISOLATE_WHEEL_2":
-                _push(session, "isolate_wheel_2", {})
-            elif kind == "ENUM_ALL":
-                _push(session, "enum_all", {})
-            elif kind == "ENUM_WHEEL":
-                _push(session, "enum_wheel", {"wheel": int(detail or 1)})
-        ctx["phase"] = "post"
-        return True, None
-
-    if pid == "tutorial.post":
-        ctx["step"] = int(ctx.get("step", 1) or 1) + 1
-        ctx["phase"] = "show"
+        if str(parsed) == "3":
+            _pop(session)
+            return True, None
+        if str(parsed) == "2":
+            ctx["advance_step"] = True
+            return True, None
+        kind = str(ctx.get("action_kind", ""))
+        detail = ctx.get("action_detail", None)
+        if kind == "FIND_AWR":
+            _push(session, "find_awr", {})
+        elif kind == "FIND_AWL":
+            _push(session, "find_awl", {})
+        elif kind == "ISOLATE_WHEEL_3":
+            _push(session, "isolate_wheel_3", {})
+        elif kind == "ISOLATE_WHEEL_2":
+            _push(session, "isolate_wheel_2", {})
+        elif kind == "ENUM_ALL":
+            _push(session, "enum_all", {})
+        elif kind == "ENUM_WHEEL":
+            _push(session, "enum_wheel", {"wheel": int(detail or 1)})
+        ctx["advance_step"] = True
         return True, None
 
     _pop(session)
