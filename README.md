@@ -10,14 +10,14 @@ to work on.
 
 ## Features
 
-- Auditable Python implementation (kept intentionally small and easy to review)
 - Records left and right contact point measurements
 - Sweep and high–low test data collection and visualization
 - Guided, step-by-step tutorial that suggests the next action based on
   your current lock configuration
 - Session-based workflow with saved configuration and measurements
-- Core functions work with Command Line Interface (CLI) or via web FastAPI
-- Crash recovery: continuously updated recovery file can be used after an unexpected crash
+- Crash recovery: user can recover and repair sessions after an unexpected crash
+- Core functions can be ran with Command Line Interface (CLI) or via web FastAPI
+- Auditable Python implementation (kept intentionally small and easy to review)
 
 ## Usage
 
