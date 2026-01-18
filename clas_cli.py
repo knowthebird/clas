@@ -231,7 +231,11 @@ def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_pat
     ax_bot.grid(True, which="minor", linestyle=":", alpha=0.3)
     ax_bot.yaxis.set_major_formatter(FuncFormatter(lambda y, _: _format_dial_tick(y, n_dial, dial_min)))
     try:
-        ax_bot.set_ylim(0, float(max(width)) * 1.1 if len(width) else 1)
+        if len(width):
+            ref = float(width[0])
+            max_dev = max(abs(float(w) - ref) for w in width)
+            pad = max(0.5, 0.05 * max_dev)
+            ax_bot.set_ylim(ref - max_dev - pad, ref + max_dev + pad)
     except Exception:
         pass
 
@@ -388,6 +392,19 @@ def _plot_high_low_png(measurements: list, test_id: int, out_path: Path, session
         highlight_if_unique(axes[2, 1], xl, wl, mode="max")
     apply_combo_ticks(axes[2, 0], xh, lab_h)
     apply_combo_ticks(axes[2, 1], xl, lab_l)
+    try:
+        if len(wh):
+            ref = float(wh[0])
+            max_dev = max(abs(float(w) - ref) for w in wh)
+            pad = max(0.5, 0.05 * max_dev)
+            axes[2, 0].set_ylim(ref - max_dev - pad, ref + max_dev + pad)
+        if len(wl):
+            ref = float(wl[0])
+            max_dev = max(abs(float(w) - ref) for w in wl)
+            pad = max(0.5, 0.05 * max_dev)
+            axes[2, 1].set_ylim(ref - max_dev - pad, ref + max_dev + pad)
+    except Exception:
+        pass
 
     gate = data[0].get("hw_gate", "")
     inc = data[0].get("hw_increment", "")
@@ -689,14 +706,27 @@ def _show_first_time_splash() -> None:
 
 
 def _read_user_input(prompt: Dict[str, Any]) -> str:
-    # show default inline if present and kind isn't confirm/choice
+    # show default inline if present and kind isn't confirm
     kind = prompt.get("kind")
     default = prompt.get("default", None)
-    if kind in ("float","int","text","csv_floats","bool_yn") and default is not None:
-        raw = input(f"> [{default}] ").rstrip("\n")
-        if raw.strip() == "":
-            return ""  # allow core to apply default
-        return raw
+    if default is not None:
+        if kind == "choice":
+            choices = prompt.get("choices", []) or []
+            default_key = str(default)
+            display_default = default_key
+            for choice in choices:
+                if isinstance(choice, dict) and str(choice.get("key")) == default_key:
+                    display_default = str(choice.get("label", default_key))
+                    break
+            raw = input(f"> [{display_default}] ").rstrip("\n")
+            if raw.strip() == "":
+                return ""  # allow core to apply default
+            return raw
+        if kind in ("float","int","text","csv_floats","bool_yn"):
+            raw = input(f"> [{default}] ").rstrip("\n")
+            if raw.strip() == "":
+                return ""  # allow core to apply default
+            return raw
     return input("> ").rstrip("\n")
 
 

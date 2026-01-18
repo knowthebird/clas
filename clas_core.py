@@ -1811,18 +1811,35 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 f"Turn left (CCW), stopping on {_fmt_float(p)} the first time you reach it. "
                 f"Turn right (CW) until you hit the LCP. Enter LCP."
             )
-        return {"id":"iso3.scan.lcp","kind":"float",
-                "text":(
-                    f"Scan {i+1}/{len(pts)} @ Wheel 3 = {_fmt_float(p)}\n"
-                    f"{lead}"
-                )}
+        prompt = {
+            "id":"iso3.scan.lcp",
+            "kind":"float",
+            "text":(
+                f"Scan {i+1}/{len(pts)} @ Wheel 3 = {_fmt_float(p)}\n"
+                f"{lead}"
+            ),
+        }
+        last_lcp = ctx.get("last_lcp")
+        if last_lcp is not None:
+            prompt["default"] = _fmt_float(last_lcp)
+        return prompt
 
     if phase == "scan_rcp":
         i = int(ctx.get("i",0) or 0)
         p = float(ctx.get("current_p"))
         dir_label = "right (CW)" if ctx.get("rcp_dir") == "right" else "left (CCW)"
-        return {"id":"iso3.scan.rcp","kind":"float",
-                "text":f"Scan {i+1}/{len(ctx['scan_points'])} @ Wheel 3 = {_fmt_float(p)}\nTurn {dir_label} until you reach the RCP. Enter RCP"}
+        prompt = {
+            "id":"iso3.scan.rcp",
+            "kind":"float",
+            "text":(
+                f"Scan {i+1}/{len(ctx['scan_points'])} @ Wheel 3 = {_fmt_float(p)}\n"
+                f"Turn {dir_label} until you reach the RCP. Enter RCP"
+            ),
+        }
+        last_rcp = ctx.get("last_rcp")
+        if last_rcp is not None:
+            prompt["default"] = _fmt_float(last_rcp)
+        return prompt
 
     if phase == "scan_between":
         p = float(ctx.get("current_p"))
@@ -1933,8 +1950,15 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 f"Turn left (CCW), stopping on {_fmt_float(p)} the first time you reach it. "
                 f"Turn right (CW) until you hit the LCP. Enter LCP."
             )
-        return {"id":"iso3.refine.lcp","kind":"float",
-                "text":f"Refine {j+1}/{len(rps)} @ Wheel 3 = {_fmt_float(p)}\n{lead}"}
+        prompt = {
+            "id":"iso3.refine.lcp",
+            "kind":"float",
+            "text":f"Refine {j+1}/{len(rps)} @ Wheel 3 = {_fmt_float(p)}\n{lead}",
+        }
+        last_lcp = ctx.get("last_lcp")
+        if last_lcp is not None:
+            prompt["default"] = _fmt_float(last_lcp)
+        return prompt
 
     if phase == "refine_between":
         p = float(ctx.get("current_p"))
@@ -1952,8 +1976,18 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         j = int(ctx.get("j",0) or 0)
         p = float(ctx.get("current_p"))
         dir_label = "right (CW)" if ctx.get("rcp_dir") == "right" else "left (CCW)"
-        return {"id":"iso3.refine.rcp","kind":"float",
-                "text":f"Refine {j+1}/{len(ctx.get('refine_points',[]))} @ Wheel 3 = {_fmt_float(p)}\nTurn {dir_label} until you reach the RCP. Enter RCP"}
+        prompt = {
+            "id":"iso3.refine.rcp",
+            "kind":"float",
+            "text":(
+                f"Refine {j+1}/{len(ctx.get('refine_points',[]))} @ Wheel 3 = {_fmt_float(p)}\n"
+                f"Turn {dir_label} until you reach the RCP. Enter RCP"
+            ),
+        }
+        last_rcp = ctx.get("last_rcp")
+        if last_rcp is not None:
+            prompt["default"] = _fmt_float(last_rcp)
+        return prompt
 
     if phase == "finish":
         sweep_id = ctx["sweep_id"]
@@ -2041,6 +2075,7 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         lcp = float(parsed)
         ctx["current_p"] = p
         ctx["current_lcp"] = lcp
+        ctx["last_lcp"] = lcp
         if _is_between_cw(p, awr, lcp, dial_min, dial_max):
             ctx["passed_awr_low"] = True
         elif _is_between_cw(awr, p, lcp, dial_min, dial_max):
@@ -2058,6 +2093,7 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         p = float(ctx.get("current_p"))
         lcp = float(ctx.get("current_lcp"))
         rcp = float(parsed)
+        ctx["last_rcp"] = rcp
         if ctx.get("rcp_dir") == "right":
             if _is_between_cw(p, awr, rcp, dial_min, dial_max):
                 ctx["passed_awr_low"] = True
@@ -2166,6 +2202,7 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         ctx["current_p"] = p
         lcp = float(parsed)
         ctx["current_lcp"] = lcp
+        ctx["last_lcp"] = lcp
         if _is_between_cw(p, awr, lcp, dial_min, dial_max):
             ctx["passed_awr_low"] = True
         elif _is_between_cw(awr, p, lcp, dial_min, dial_max):
@@ -2184,6 +2221,7 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         p = float(ctx.get("current_p"))
         lcp = float(ctx.get("current_lcp"))
         rcp = float(parsed)
+        ctx["last_rcp"] = rcp
         if ctx.get("rcp_dir") == "right":
             if _is_between_cw(p, awr, rcp, dial_min, dial_max):
                 ctx["passed_awr_low"] = True
@@ -2397,14 +2435,25 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 f"Turn left (CCW) passing {_fmt_float(offset)} one time, continue until you hit {_fmt_float(w3)}, then stop.\n"
                 f"Turn right (CW) until you hit LCP. Enter LCP"
             )
-        return {"id":"iso2.scan.lcp","kind":"float","text": text}
+        prompt = {"id":"iso2.scan.lcp","kind":"float","text": text}
+        last_lcp = ctx.get("last_lcp")
+        if last_lcp is not None:
+            prompt["default"] = _fmt_float(last_lcp)
+        return prompt
 
     if phase == "scan_rcp":
         offsets = ctx.get("offsets", []) or []
         oi = int(ctx.get("oi", 0) or 0)
         cycle_label = f"{oi+1}/{max(1, len(offsets))}"
-        return {"id":"iso2.scan.rcp","kind":"float",
-                "text":f"Cycle {cycle_label}\nTurn left (CCW) until you hit RCP. Enter RCP"}
+        prompt = {
+            "id":"iso2.scan.rcp",
+            "kind":"float",
+            "text":f"Cycle {cycle_label}\nTurn left (CCW) until you hit RCP. Enter RCP",
+        }
+        last_rcp = ctx.get("last_rcp")
+        if last_rcp is not None:
+            prompt["default"] = _fmt_float(last_rcp)
+        return prompt
 
     if phase == "plot_offer":
         sweep_id = int(ctx.get("sweep_id", 0) or 0)
@@ -2500,20 +2549,37 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
             return _prompt_isolate_wheel_2(session, ctx)
         p = float(rps[i])
         w1 = float(ctx["wheel_1_stop"]); w3 = float(ctx["wheel_3_stop"])
-        return {"id":"iso2.refine.lcp","kind":"float",
-                "text":(
-                    f"Refine {i+1}/{len(rps)} @ Wheel 2 = {_fmt_float(p)}\n"
-                    f"Turn left (CCW) passing {_fmt_float(w1)} three times, stop on {_fmt_float(w1)}.\n"
-                    f"Turn right (CW) passing {_fmt_float(w1)} two times, stop on {_fmt_float(p)}.\n"
-                    f"Turn left (CCW) passing {_fmt_float(p)} one time, stop on {_fmt_float(w3)}.\n"
-                    f"Turn right (CW) until you hit LCP. Enter LCP"
-                )}
+        prompt = {
+            "id":"iso2.refine.lcp",
+            "kind":"float",
+            "text":(
+                f"Refine {i+1}/{len(rps)} @ Wheel 2 = {_fmt_float(p)}\n"
+                f"Turn left (CCW) passing {_fmt_float(w1)} three times, stop on {_fmt_float(w1)}.\n"
+                f"Turn right (CW) passing {_fmt_float(w1)} two times, stop on {_fmt_float(p)}.\n"
+                f"Turn left (CCW) passing {_fmt_float(p)} one time, stop on {_fmt_float(w3)}.\n"
+                f"Turn right (CW) until you hit LCP. Enter LCP"
+            ),
+        }
+        last_lcp = ctx.get("last_lcp")
+        if last_lcp is not None:
+            prompt["default"] = _fmt_float(last_lcp)
+        return prompt
 
     if phase == "refine_rcp":
         i = int(ctx.get("ri",0) or 0)
         p = float(ctx.get("current_p"))
-        return {"id":"iso2.refine.rcp","kind":"float",
-                "text":f"Refine {i+1}/{len(ctx.get('refine_points',[]))} @ Wheel 2 = {_fmt_float(p)}\nTurn left (CCW) until you hit RCP. Enter RCP"}
+        prompt = {
+            "id":"iso2.refine.rcp",
+            "kind":"float",
+            "text":(
+                f"Refine {i+1}/{len(ctx.get('refine_points',[]))} @ Wheel 2 = {_fmt_float(p)}\n"
+                "Turn left (CCW) until you hit RCP. Enter RCP"
+            ),
+        }
+        last_rcp = ctx.get("last_rcp")
+        if last_rcp is not None:
+            prompt["default"] = _fmt_float(last_rcp)
+        return prompt
 
     if phase == "post_refine_plot_offer":
         sweep_id = int(ctx.get("sweep_id", 0) or 0)
@@ -2607,13 +2673,16 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         return True, None
 
     if pid == "iso2.scan.lcp":
-        ctx["current_lcp"] = float(parsed)
+        lcp = float(parsed)
+        ctx["current_lcp"] = lcp
+        ctx["last_lcp"] = lcp
         ctx["phase"] = "scan_rcp"
         return True, None
 
     if pid == "iso2.scan.rcp":
         lcp = float(ctx.get("current_lcp"))
         rcp = float(parsed)
+        ctx["last_rcp"] = rcp
         w1 = float(ctx["wheel_1_stop"]); w3 = float(ctx["wheel_3_stop"])
         offset = float(ctx["offset"])
         rows = ctx.get("rows", [])
@@ -2725,7 +2794,9 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         i = int(ctx.get("ri",0) or 0)
         p = float(rps[i])
         ctx["current_p"] = p
-        ctx["current_lcp"] = float(parsed)
+        lcp = float(parsed)
+        ctx["current_lcp"] = lcp
+        ctx["last_lcp"] = lcp
         ctx["phase"] = "refine_rcp"
         return True, None
 
@@ -2735,6 +2806,7 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         p = float(ctx.get("current_p"))
         lcp = float(ctx.get("current_lcp"))
         rcp = float(parsed)
+        ctx["last_rcp"] = rcp
         w1 = float(ctx["wheel_1_stop"]); w3 = float(ctx["wheel_3_stop"])
         session["state"]["measurements"].append({
             "id": _next_measurement_id(session, ctx),
