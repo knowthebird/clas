@@ -66,7 +66,7 @@ At **any** input prompt:
 * `q` quits the program (clean exit)
 * `s` saves the primary session JSON (and then returns you to the same prompt)
 * `u` undoes the last accepted action and returns you to the previous prompt
-* `e` exits the current workflow/menu level (like “back”)
+* `a` aborts the current workflow/menu level (like “back”)
 
 > Note: These letters are reserved. If a workflow would normally use them as normal input, the prompt/options should be changed to avoid conflicts.
 
@@ -76,8 +76,8 @@ CLAS includes an interactive tutorial designed to walk you through the
 analysis process step-by-step.
 
 The tutorial uses your current configuration and recorded data to
-suggest appropriate next actions such as isolating wheels or exhaustive
-enumeration of candidate gates.
+suggest appropriate next actions such as isolating wheels or sweeping
+a wheel per candidate gates.
 
 You can access the tutorial from:
 
@@ -100,7 +100,7 @@ Basic flow:
 
 * `POST /sessions` creates a new session and returns a `session_id`
 * `GET /sessions/{session_id}/prompt` returns the next prompt to display
-* `POST /sessions/{session_id}/action` sends user input (or commands like undo/exit)
+* `POST /sessions/{session_id}/action` sends user input (or commands like undo/abort)
 * `POST /sessions/{session_id}/undo` is a convenience endpoint
 
 ## Data and Sessions

@@ -45,7 +45,7 @@ Responsibilities:
 - Render prompts from clas_core.get_prompt()
 - Read user input and translate it into core actions
 - Implement global commands at any prompt:
-    q = quit   s = save   u = undo   e = exit/back
+    q = quit   s = save   u = undo   a = abort/back
 - Persist the full session as ONE JSON file (manual save)
 - Maintain a crash recovery mirror file alongside the session:
     session-name-YYYYMMDD-HHMMSS.json.recovery-data
@@ -121,8 +121,6 @@ def _plot_sweep_png(measurements: list, wheel_swept: int, sweep_id: int, out_pat
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import FuncFormatter
-    from matplotlib.ticker import FuncFormatter
     from matplotlib.ticker import FuncFormatter
     import numpy as np
 
@@ -546,7 +544,7 @@ def _select_session_interactive(folder: Path) -> tuple[Path, Optional[Path], Dic
     session_files = sorted([p for p in folder.glob("*.json") if p.is_file() and not _is_recovery_file(p)])
 
     print("\n=== CLAS (CLI) ===")
-    print("Global commands anytime: u=undo, s=save, e=exit, q=quit\n")
+    print("Global commands anytime: u=undo, s=save, a=abort, q=quit\n")
 
     options: list[tuple[str, str, str]] = []
     # Add recovery options first
@@ -718,7 +716,7 @@ def run_cli(session_path: Optional[str] = None) -> None:
 
             raw = _read_user_input(prompt)
 
-            # literal escape handling for text prompts (\q, \s, \u, \e)
+            # literal escape handling for text prompts (\q, \s, \u, \a)
             if prompt.get("kind") == "text" and raw.strip().startswith("\\") and len(raw.strip()) == 2:
                 raw = raw.strip()[1:]
 
@@ -752,7 +750,7 @@ def run_cli(session_path: Optional[str] = None) -> None:
                 print(f"[Saved] {session_path_p.name}")
                 continue  # reprompt same prompt
 
-            # undo/exit commands into core
+            # undo/abort commands into core
             cmd_action = _interpret_global_commands(raw, prompt.get("kind", "text"))
             if cmd_action is not None:
                 data = core.apply_action(data, cmd_action)

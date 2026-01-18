@@ -636,8 +636,8 @@ Press Enter to return.""",
                 {"key": "3", "label": "Isolate wheel 3 (3-wheel LRL)"},
                 {"key": "4", "label": "Isolate wheel 2 (3-wheel LRL)"},
                 {"key": "5", "label": "High Low Test (3-wheel LRL)"},
-                {"key": "6", "label": "Exhaustive enumeration (all wheels)"},
-                {"key": "7", "label": "Exhaustive enumeration (single wheel)"},
+                {"key": "6", "label": "Candidate-combination search (all wheels)"},
+                {"key": "7", "label": "Single-wheel sweep"},
                 {"key": "8", "label": "Return"},
             ],
             "help": hint,
@@ -661,11 +661,11 @@ Press Enter to return.""",
     if screen == "high_low_test":
         return _prompt_high_low_test(session, ctx)
 
-    if screen == "enum_all":
-        return _prompt_enum_all(session, ctx)
+    if screen in ("candidate_combo_all", "enum_all"):
+        return _prompt_candidate_combo_all(session, ctx)
 
-    if screen == "enum_wheel":
-        return _prompt_enum_wheel(session, ctx)
+    if screen in ("single_wheel_sweep", "enum_wheel"):
+        return _prompt_single_wheel_sweep(session, ctx)
 
     # fallback
     return {
@@ -679,7 +679,7 @@ Press Enter to return.""",
 def apply_action(session: Session, action: Action) -> Session:
     """
     Apply a single action. The adapter is responsible for interpreting global commands
-    (q/s/u/a). For u and e, pass command actions into core.
+    (q/s/u/a). For u and a, pass command actions into core.
 
     action formats:
       {"type":"input","text":"..."}
@@ -915,11 +915,11 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
     if screen == "high_low_test":
         return _apply_high_low_test(session, ctx, parsed, prompt)
 
-    if screen == "enum_all":
-        return _apply_enum_all(session, ctx, parsed, prompt)
+    if screen in ("candidate_combo_all", "enum_all"):
+        return _apply_candidate_combo_all(session, ctx, parsed, prompt)
 
-    if screen == "enum_wheel":
-        return _apply_enum_wheel(session, ctx, parsed, prompt)
+    if screen in ("single_wheel_sweep", "enum_wheel"):
+        return _apply_single_wheel_sweep(session, ctx, parsed, prompt)
 
     if screen == "analyze_menu":
         return _apply_analyze_menu(session, ctx, parsed)
@@ -1029,10 +1029,10 @@ def _apply_tests_menu(session: Session, ctx: Dict[str, Any], choice: str) -> Tup
         _push(session, "high_low_test", {})
         return True, None
     if choice == "6":
-        _push(session, "enum_all", {})
+        _push(session, "candidate_combo_all", {})
         return True, None
     if choice == "7":
-        _push(session, "enum_wheel", {})
+        _push(session, "single_wheel_sweep", {})
         return True, None
     if choice == "8":
         _pop(session)
@@ -3052,7 +3052,7 @@ def _suggest_stop_for_isolate_wheel_2(session: Session, wheel_num: int) -> Tuple
 
 
 # -----------------------
-# Exhaustive enumeration (simplified)
+# Candidate-combination search (simplified)
 # TODO: Add optimized per-wheel enumeration paths to reduce unnecessary tries.
 # -----------------------
 
@@ -3087,7 +3087,7 @@ def _effective_gate_list(wdata: Dict[str, Any]) -> List[float]:
     return out
 
 
-def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+def _prompt_candidate_combo_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     # TODO: Use optimized paths for iterating through points to reduce attempts.
     lc = session["state"]["lock_config"]
     wd = lc.get("wheel_data", {}) or {}
@@ -3100,7 +3100,7 @@ def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
                 "id":"enumall.intro",
                 "kind":"confirm",
                 "text":(
-                    "Exhaustive Enumeration (All Wheels)\n"
+                    "Candidate-combination search (All Wheels)\n"
                     "This test will guide testing all possible combinations of known/suspected gates.\n"
                     "It requires known/suspected gates to limit the number of enumerations/attempts, and\n"
                     "does not try all combinations possible for the given range and tolerance of the dials.\n"
@@ -3119,10 +3119,10 @@ def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     combos = ctx["combos"]
     i = int(ctx.get("i",0) or 0)
     if i >= len(combos):
-        return {"id":"enumall.done","kind":"confirm","text":"Enumeration complete. Press Enter to return."}
+        return {"id":"enumall.done","kind":"confirm","text":"Candidate-combination search complete. Press Enter to return."}
 
     combo = combos[i]
-    # result prompt: avoid reserved q/s/u/e
+        # result prompt: avoid reserved q/s/u/a
     return {
         "id":"enumall.result",
         "kind":"choice",
@@ -3138,7 +3138,7 @@ def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     }
 
 
-def _apply_enum_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+def _apply_candidate_combo_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
     pid = prompt.get("id","")
     if pid == "enumall.intro":
         ctx["intro_ack"] = True
@@ -3189,7 +3189,7 @@ def _apply_enum_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
     return True, None
 
 
-def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+def _prompt_single_wheel_sweep(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     # TODO: Use optimized paths for iterating through points to reduce attempts.
     lc = session["state"]["lock_config"]
     wheels = int(lc.get("wheels",0) or 0)
@@ -3225,7 +3225,7 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         idx = int(ctx.get("fixed_idx",0) or 0)
         if idx >= len(others):
             ctx["step"] = "run"
-            return _prompt_enum_wheel(session, ctx)
+            return _prompt_single_wheel_sweep(session, ctx)
         ow = others[idx]
         wdata = (lc.get("wheel_data", {}) or {}).get(str(ow), {}) or {}
         known = _first_num(wdata.get("known_gates"))
@@ -3251,7 +3251,7 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             ctx["gi"] = 0
         gi = int(ctx.get("gi",0) or 0)
         if gi >= len(ctx["gates"]):
-            return {"id":"enumw.done","kind":"confirm","text":"Enumeration complete. Press Enter to return."}
+            return {"id":"enumw.done","kind":"confirm","text":"Single-wheel sweep complete. Press Enter to return."}
         g = float(ctx["gates"][gi])
 
         # build combo for display
@@ -3284,7 +3284,7 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
     return {"id":"enumw.unknown","kind":"confirm","text":"Press Enter to return."}
 
 
-def _apply_enum_wheel(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+def _apply_single_wheel_sweep(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
     pid = prompt.get("id","")
     if pid in ("enumw.no_gates","enumw.done","enumw.unknown"):
         _pop(session)
@@ -3564,9 +3564,9 @@ def _tutorial_decide(lc: Dict[str, Any]) -> Tuple[str, Optional[int], str]:
     if kind == "ISOLATE_WHEEL_2":
         return ("ISOLATE_WHEEL_2", None, "Isolate Wheel 2")
     if kind == "ENUM_ALL":
-        return ("ENUM_ALL", None, "Exhaustive Enumeration using current candidates")
+        return ("ENUM_ALL", None, "Candidate-combination search using current candidates")
 
-    return ("ENUM_WHEEL", detail, f"Exhaustive Enumeration for Wheel {detail}")
+    return ("ENUM_WHEEL", detail, f"Single-wheel sweep for Wheel {detail}")
 
 
 def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int], str]]:
@@ -3587,9 +3587,9 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
         actions.append(("HIGH_LOW", None, "High Low Test (confirm Wheel 2 gate)"))
     if len(wks) == 2:
         missing = [w for w in (1, 2, 3) if w not in wks][0]
-        actions.append(("ENUM_WHEEL", missing, f"Exhaustive Enumeration for Wheel {missing}"))
+        actions.append(("ENUM_WHEEL", missing, f"Single-wheel sweep for Wheel {missing}"))
     elif len(wks) >= 2:
-        actions.append(("ENUM_ALL", None, "Exhaustive Enumeration using current candidates"))
+        actions.append(("ENUM_ALL", None, "Candidate-combination search using current candidates"))
     return actions
 
 
@@ -3714,9 +3714,9 @@ def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         elif kind == "HIGH_LOW":
             _push(session, "high_low_test", {})
         elif kind == "ENUM_ALL":
-            _push(session, "enum_all", {})
+            _push(session, "candidate_combo_all", {})
         elif kind == "ENUM_WHEEL":
-            _push(session, "enum_wheel", {"wheel": int(detail or 1)})
+            _push(session, "single_wheel_sweep", {"wheel": int(detail or 1)})
         ctx["advance_step"] = True
         return True, None
 
