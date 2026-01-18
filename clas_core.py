@@ -68,7 +68,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.4"
+CLAS_CORE_VERSION = "0.2.5"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -2343,6 +2343,10 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         wd = lc.get("wheel_data", {}) or {}
         w3_suspected = (wd.get("3", {}) or {}).get("suspected_gates", []) or []
         w3_suspected = [float(x) for x in w3_suspected if x is not None]
+        if ctx.get("wheel_3_stop_override") and w3 is not None:
+            w3_suspected = [float(w3)]
+        elif not w3_suspected and w3 is not None:
+            w3_suspected = [float(w3)]
         w3_suspected_label = ", ".join(_fmt_float(x) for x in w3_suspected)
 
         if not isinstance(ctx.get("offsets"), list):
@@ -2368,22 +2372,23 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         cycle_label = f"{oi+1}/{len(offsets)}"
         if oi + 1 >= 2:
             if w3_suspected:
-                intro = f"passing wheel 3 suspected gate ({w3_suspected_label}) one time"
+                intro = f"passing {w3_suspected_label} one time"
             else:
                 intro = f"passing {_fmt_float(w3)} one time"
             continue_parts = []
             if prev_offset is not None:
                 continue_parts.append(f"passing the last checkpoint {_fmt_float(prev_offset)} one time")
-            detail_text = "continue turning "
+            detail_text = "continue turning"
             if continue_parts:
-                detail_text = f"continue turning {' and '.join(continue_parts)}, "
+                detail_text = f"continue turning {' and '.join(continue_parts)},"
             text = (
                 f"Cycle {cycle_label}\n"
-                f"Turn right (CW) {intro}, and {detail_text}until you reach {_fmt_float(offset)}, then stop. "
-                f"(NOTE: if you did not make 1 full revolution turning from {_fmt_float(w3)} to {_fmt_float(offset)} "
-                f"continue turning until you have made 1 full revolution and reached {_fmt_float(offset)}.)\n"
-                f"Turn left (CCW) passing {_fmt_float(offset)} one time, then stopping on {_fmt_float(w3)}.\n"
-                f"Turn right (CW) until you hit the LCP. Enter LCP"
+                f"Turn right (CW) {intro}, then {detail_text} until you reach {_fmt_float(offset)}. Stop.\n"
+                f"   NOTE: If, during testing, the target point {_fmt_float(offset)} has passed the Wheel 3 suspected gate "
+                f"position ({w3_suspected_label}),\n   you must still complete one full revolution after passing "
+                f"({w3_suspected_label}) before stopping at {_fmt_float(offset)}.\n"
+                f"Turn left (CCW), pass {_fmt_float(offset)} once, then stop at {_fmt_float(w3)}.\n"
+                f"Turn right (CW) until you hit the LCP. Enter LCP.\n"
             )
         else:
             text = (
@@ -2573,7 +2578,15 @@ def _apply_isolate_wheel_2(session: Session, ctx: Dict[str, Any], parsed: Any, p
         return True, None
 
     if pid in ("iso2.w3.confirm","iso2.w3.manual"):
-        ctx["wheel_3_stop"] = float(parsed)
+        w3_val = float(parsed)
+        ctx["wheel_3_stop"] = w3_val
+        if pid == "iso2.w3.manual":
+            ctx["wheel_3_stop_override"] = True
+            ctx["wheel_3_stop_src"] = "manual"
+        else:
+            suggested = ctx.get("wheel_3_stop_suggest")
+            if suggested is not None and float(suggested) != w3_val:
+                ctx["wheel_3_stop_override"] = True
         ctx["phase"] = "intro"
         return True, None
 
@@ -2873,7 +2886,7 @@ def _prompt_high_low_test(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
                 winners = [c for c, w in max_by_case.items() if w == max_w]
                 if len(winners) == 1:
                     case = winners[0]
-                    result_line = f"Largest contact width in case {case}. Gate is likely on Wheel {case}."
+                    result_line = f"Largest contact width in case {case}.\nIf contact width is much larger, than gate may be on Wheel {case}.\nIf not, other wheels may be overshadowing (possibly low point used earlier was a gate on another wheel.)"
         return {
             "id":"high_low.done",
             "kind":"confirm",
@@ -3577,8 +3590,7 @@ def _tutorial_plan_actions(lc: Dict[str, Any]) -> List[Tuple[str, Optional[int],
     # After AWR, isolate wheel 3 only if we don't already have a known/suspected gate.
     if 3 not in wks:
         actions.append(("ISOLATE_WHEEL_3", None, "Isolate Wheel 3"))
-    else:
-        actions.append(("HIGH_LOW", None, "High Low Test (confirm Wheel 3 gate)"))
+    actions.append(("HIGH_LOW", None, "High Low Test (confirm Wheel 3 gate)"))
     if lc.get("awl_low_point") is None:
         actions.append(("FIND_AWL", None, "Find the All Wheels Left (AWL) low point"))
     if 2 not in wks:
@@ -3624,6 +3636,11 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
         if ctx.get("last_action") == "FIND_AWR" and lc.get("awr_low_point") is not None:
             for i, (kind, _, _) in enumerate(actions, 1):
                 if kind == "ISOLATE_WHEEL_3":
+                    step = i
+                    break
+        if ctx.get("last_action") == "ISOLATE_WHEEL_3":
+            for i, (kind, _, _) in enumerate(actions, 1):
+                if kind == "HIGH_LOW":
                     step = i
                     break
     if actions:
