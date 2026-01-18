@@ -68,7 +68,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.3"
+CLAS_CORE_VERSION = "0.2.4"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -445,7 +445,7 @@ def _parse_bool_yn(raw: str) -> Tuple[Optional[bool], Optional[str]]:
 
 def _parse_csv_floats(raw: str) -> Tuple[List[float], Optional[str]]:
     r = raw.strip()
-    if r == "":
+    if r == "" or r == "-":
         return [], None
     parts = [p.strip() for p in r.split(",") if p.strip() != ""]
     out: List[float] = []
@@ -622,6 +622,8 @@ Press Enter to return.""",
 
     if screen == "tutorial":
         return _prompt_tutorial(session, ctx)
+    if screen == "tutorial_done":
+        return _prompt_tutorial_done(session, ctx)
 
     if screen == "tests_menu":
         return {
@@ -831,6 +833,8 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
         parsed = raw
     elif kind == "choice":
         key = raw.strip()
+        if key == "" and str(prompt.get("id", "")) == "tutorial.show":
+            key = "3"
         choices = prompt.get("choices", []) or []
         valid = {c["key"] for c in choices if isinstance(c, dict) and "key" in c}
         if key not in valid:
@@ -851,7 +855,10 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
         if err:
             return False, err
     elif kind == "csv_floats":
-        parsed, err = _parse_csv_floats(raw)
+        if raw.strip() == "-" and str(prompt.get("id", "")).startswith("config.gates."):
+            parsed, err = None, None
+        else:
+            parsed, err = _parse_csv_floats(raw)
         if err:
             return False, err
     elif kind == "text":
@@ -871,6 +878,8 @@ def _apply_input_to_current_prompt(session: Session, prompt: PromptSpec, raw_tex
 
     if screen == "tutorial":
         return _apply_tutorial(session, ctx, parsed, prompt)
+    if screen == "tutorial_done":
+        return _apply_tutorial_done(session, ctx, parsed, prompt)
 
     if screen == "settings_menu":
         return _apply_settings_menu(session, ctx, parsed)
@@ -1347,8 +1356,9 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {})
         cur = wd.get(str(w), {})
-        # empty list means keep (parser returns [] on empty input)
-        if parsed != []:
+        if parsed is None:
+            cur["known_gates"] = []
+        elif parsed != []:
             cur["known_gates"] = parsed
         wd[str(w)] = cur
         work["wheel_data"] = wd
@@ -1359,7 +1369,9 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
         w = int(ctx.get("gate_w", 1) or 1)
         wd = normalize_lock_config(work).get("wheel_data", {})
         cur = wd.get(str(w), {})
-        if parsed != []:
+        if parsed is None:
+            cur["suspected_gates"] = []
+        elif parsed != []:
             cur["suspected_gates"] = parsed
         wd[str(w)] = cur
         work["wheel_data"] = wd
@@ -1371,7 +1383,10 @@ def _apply_configure_lock(session: Session, ctx: Dict[str, Any], parsed: Any, pr
             w = int(ctx.get("gate_w", 1) or 1)
             wd = work.setdefault("wheel_data", {})
             wdata = wd.setdefault(str(w), {})
-            parsed_list = parsed if isinstance(parsed, list) else ([] if parsed in (None, "") else [parsed])
+            if parsed is None:
+                parsed_list = []
+            else:
+                parsed_list = parsed if isinstance(parsed, list) else ([] if parsed in ("",) else [parsed])
             wdata["false_gates"] = parsed_list
             wd[str(w)] = wdata
             work["wheel_data"] = wd
@@ -3038,9 +3053,11 @@ def _suggest_stop_for_isolate_wheel_2(session: Session, wheel_num: int) -> Tuple
 
 # -----------------------
 # Exhaustive enumeration (simplified)
+# TODO: Add optimized per-wheel enumeration paths to reduce unnecessary tries.
 # -----------------------
 
 def _effective_gate_list(wdata: Dict[str, Any]) -> List[float]:
+    # TODO: Use false gates to optimize testing (skip known bad positions or use lower points to measure other wheels).
     gates = []
     for k in ("known_gates", "suspected_gates"):
         v = wdata.get(k, [])
@@ -3071,11 +3088,25 @@ def _effective_gate_list(wdata: Dict[str, Any]) -> List[float]:
 
 
 def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+    # TODO: Use optimized paths for iterating through points to reduce attempts.
     lc = session["state"]["lock_config"]
     wd = lc.get("wheel_data", {}) or {}
     wheels = int(lc.get("wheels",0) or 0)
 
     if "init" not in ctx:
+        if not ctx.get("intro_ack"):
+            ctx["shown_intro"] = True
+            return {
+                "id":"enumall.intro",
+                "kind":"confirm",
+                "text":(
+                    "Exhaustive Enumeration (All Wheels)\n"
+                    "This test will guide testing all possible combinations of known/suspected gates.\n"
+                    "It requires known/suspected gates to limit the number of enumerations/attempts, and\n"
+                    "does not try all combinations possible for the given range and tolerance of the dials.\n"
+                    "Press Enter to start."
+                ),
+            }
         candidates = {}
         for w in range(1, wheels+1):
             gates = _effective_gate_list(wd.get(str(w), {}) or {})
@@ -3109,6 +3140,9 @@ def _prompt_enum_all(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
 
 def _apply_enum_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
     pid = prompt.get("id","")
+    if pid == "enumall.intro":
+        ctx["intro_ack"] = True
+        return True, None
     if pid in ("enumall.no_gates","enumall.done"):
         _pop(session)
         return True, None
@@ -3122,6 +3156,22 @@ def _apply_enum_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         if res == "1":
             # success
             session["state"]["metadata"]["found_combination"] = list(combo)
+            lc = dict(session["state"]["lock_config"])
+            wd = lc.get("wheel_data", {}) or {}
+            wheels = int(lc.get("wheels", 0) or 0)
+            for i in range(1, wheels + 1):
+                wdata = wd.get(str(i), {}) or {}
+                known = wdata.get("known_gates", []) or []
+                suspected = wdata.get("suspected_gates", []) or []
+                val = float(combo[i - 1])
+                if val not in known:
+                    known.append(val)
+                suspected = [x for x in suspected if float(x) != val]
+                wdata["known_gates"] = known
+                wdata["suspected_gates"] = suspected
+                wd[str(i)] = wdata
+            lc["wheel_data"] = wd
+            session["state"]["lock_config"] = normalize_lock_config(lc)
             ctx["i"] = len(combos)  # stop
             return True, None
 
@@ -3140,6 +3190,7 @@ def _apply_enum_all(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
 
 
 def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+    # TODO: Use optimized paths for iterating through points to reduce attempts.
     lc = session["state"]["lock_config"]
     wheels = int(lc.get("wheels",0) or 0)
 
@@ -3148,7 +3199,21 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
 
     if ctx["step"] == "choose_wheel":
         choices = [{"key": str(w), "label": f"Wheel {w}"} for w in range(1, wheels+1)]
-        return {"id":"enumw.wheel","kind":"choice","text":"Choose a wheel to enumerate", "choices": choices}
+        wd = lc.get("wheel_data", {}) or {}
+        default_key = None
+        for w in range(1, wheels + 1):
+            wdata = wd.get(str(w), {}) or {}
+            if not (wdata.get("known_gates") or []) and not (wdata.get("suspected_gates") or []):
+                default_key = str(w)
+                break
+        suggest = f" (suggest Wheel {default_key})" if default_key else ""
+        return {
+            "id":"enumw.wheel",
+            "kind":"choice",
+            "text":f"Choose a wheel to enumerate{suggest}",
+            "choices": choices,
+            "default": default_key,
+        }
 
     # after choosing wheel, prompt fixed combination for other wheels (simple)
     if ctx["step"] == "enter_fixed":
@@ -3162,17 +3227,26 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             ctx["step"] = "run"
             return _prompt_enum_wheel(session, ctx)
         ow = others[idx]
-        return {"id":"enumw.fixed", "kind":"float", "text":f"Enter fixed stop for wheel {ow} (used for all tries)"}
+        wdata = (lc.get("wheel_data", {}) or {}).get(str(ow), {}) or {}
+        known = _first_num(wdata.get("known_gates"))
+        suspected = _first_num(wdata.get("suspected_gates"))
+        default = known if known is not None else suspected
+        prompt = {"id":"enumw.fixed", "kind":"float", "text":f"Enter fixed stop for wheel {ow} (used for all tries)"}
+        if default is not None:
+            prompt["default"] = _fmt_float(default)
+        return prompt
 
     if ctx["step"] == "run":
         # build candidates for chosen wheel
         lc = session["state"]["lock_config"]
-        wd = lc.get("wheel_data", {}) or {}
         w = int(ctx["wheel"])
-        gates = _effective_gate_list(wd.get(str(w), {}) or {})
-        if not gates:
-            return {"id":"enumw.no_gates","kind":"confirm","text":f"Wheel {w} has no known/suspected gates. Press Enter to return."}
         if "gates" not in ctx:
+            dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+            tol = float(lc.get("tolerance", 1.0) or 1.0)
+            step = max(1e-9, 2.0 * tol)
+            span = float(dial_max - dial_min)
+            steps = int(span / step) + 1
+            gates = [wrap_dial(dial_min + (i * step), dial_min, dial_max) for i in range(max(1, steps))]
             ctx["gates"] = gates
             ctx["gi"] = 0
         gi = int(ctx.get("gi",0) or 0)
@@ -3192,7 +3266,12 @@ def _prompt_enum_wheel(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "id":"enumw.result",
             "kind":"choice",
             "text":(
-                f"Try combination (wheel {w} varied): {_fmt_float_tuple(combo)}\n"
+                f"Refine {gi+1}/{len(ctx['gates'])} @ Wheel {w} = {_fmt_float(g)}\n"
+                f"Try combination (wheel {w} varied): {_fmt_float_tuple(combo)}\n\n"
+                f"Turn left (CCW) passing {_fmt_float(combo[0])} three times, stop on {_fmt_float(combo[0])}.\n"
+                f"Turn right (CW) passing {_fmt_float(combo[0])} two times, stop on {_fmt_float(combo[1])}.\n"
+                f"Turn left (CCW) passing {_fmt_float(combo[1])} one time, stop on {_fmt_float(combo[2])}.\n"
+                "Turn right (CW) to test position.\n\n"
                 f"Enter result:\n"
                 f"  0) Closed (record attempt)\n"
                 f"  1) Opened (SUCCESS and stop)\n"
@@ -3242,6 +3321,20 @@ def _apply_enum_wheel(session: Session, ctx: Dict[str, Any], parsed: Any, prompt
         res = str(parsed)
         if res == "1":
             session["state"]["metadata"]["found_combination"] = list(combo)
+            wd = lc.get("wheel_data", {}) or {}
+            for i in range(1, wheels + 1):
+                wdata = wd.get(str(i), {}) or {}
+                known = wdata.get("known_gates", []) or []
+                suspected = wdata.get("suspected_gates", []) or []
+                val = float(combo[i - 1])
+                if val not in known:
+                    known.append(val)
+                suspected = [x for x in suspected if float(x) != val]
+                wdata["known_gates"] = known
+                wdata["suspected_gates"] = suspected
+                wd[str(i)] = wdata
+            lc["wheel_data"] = wd
+            session["state"]["lock_config"] = normalize_lock_config(lc)
             ctx["gi"] = len(ctx["gates"])  # stop
             return True, None
         if res in ("0","2"):
@@ -3511,6 +3604,18 @@ def _prompt_tutorial(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
             "text": "Tutorial is only implemented for 3-wheel LRL locks at this time.\nPress Enter to return.",
         }
 
+    if ctx.get("last_action") in ("ENUM_ALL", "ENUM_WHEEL") and not ctx.get("_celebrated", False):
+        all_known = True
+        for w in range(1, wheels + 1):
+            wd = (lc.get("wheel_data", {}) or {}).get(str(w), {}) or {}
+            if not (wd.get("known_gates") or []):
+                all_known = False
+                break
+        if all_known:
+            ctx["_celebrated"] = True
+            _push(session, "tutorial_done", {})
+            return _prompt_tutorial_done(session, _top(session)["ctx"])
+
     step = int(ctx.get("step", 1) or 1)
     actions = _tutorial_plan_actions(lc)
     total_steps = len(actions) if actions else step
@@ -3616,6 +3721,19 @@ def _apply_tutorial(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: 
         return True, None
 
     _pop(session)
+    return True, None
+
+
+def _prompt_tutorial_done(session: Session, ctx: Dict[str, Any]) -> PromptSpec:
+    return {
+        "id": "tutorial.done",
+        "kind": "confirm",
+        "text": "Congratulations, you got an open!\nPress Enter to return (Exit Tutorial).",
+    }
+
+
+def _apply_tutorial_done(session: Session, ctx: Dict[str, Any], parsed: Any, prompt: PromptSpec) -> Tuple[bool, Optional[str]]:
+    session["runtime"]["stack"] = [{"screen": "main_menu", "ctx": {}}]
     return True, None
 
 
