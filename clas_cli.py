@@ -557,6 +557,7 @@ def _select_session_interactive(folder: Path) -> tuple[Path, Optional[Path], Dic
         options.append(("session", str(sf), f"Open session {sf.name}"))
 
     options.append(("new", "", "Create a new session"))
+    options.append(("repair", "", "Repair a session (replay history from start)"))
 
     for i, (_, _, label) in enumerate(options, 1):
         print(f"{i}) {label}")
@@ -594,6 +595,23 @@ def _select_session_interactive(folder: Path) -> tuple[Path, Optional[Path], Dic
         if kind == "session":
             session_path = Path(path_s)
             data = core.normalize_session(_load_json(session_path))
+            resume_latest = False
+            if int(data.get("cursor", 0) or 0) < len(data.get("history", []) or []):
+                ans = input("Session has newer history beyond the current cursor. Resume latest? (y/n): ").strip().lower()
+                if ans.startswith("y"):
+                    resume_latest = True
+                    # Prefer loading the newest recovery mirror to avoid replay mismatches.
+                    recovery_files = _list_recovery_files(folder)
+                    matching = [
+                        rf for rf in recovery_files
+                        if _derive_base_session_name_from_recovery(rf) == session_path.name
+                    ]
+                    if matching:
+                        recovery_path = sorted(matching)[-1]
+                        data = core.normalize_session(_load_json(recovery_path))
+                        data = core.rebuild(data)
+                        return session_path, recovery_path, data
+                    data["cursor"] = len(data.get("history", []) or [])
             data = core.rebuild(data)
             recovery_path = _make_recovery_path(session_path)
             return session_path, recovery_path, data
@@ -607,6 +625,38 @@ def _select_session_interactive(folder: Path) -> tuple[Path, Optional[Path], Dic
             session_path = folder / base_name
             # keep existing recovery timestamp filename (do not change timestamp)
             return session_path, recovery_path, data
+
+        if kind == "repair":
+            if not session_files:
+                print("No sessions available to repair.")
+                continue
+            print("\nRepair which session?")
+            for i, sf in enumerate(session_files, 1):
+                print(f"{i}) {sf.name}")
+            while True:
+                raw_sess = input("\nChoose an option number: ").strip()
+                if raw_sess.lower() in ("q", "quit"):
+                    raise SystemExit(0)
+                try:
+                    sess_idx = int(raw_sess)
+                except Exception:
+                    print("Enter a valid option number.")
+                    continue
+                if sess_idx < 1 or sess_idx > len(session_files):
+                    print("Enter a valid option number.")
+                    continue
+                session_path = session_files[sess_idx - 1]
+                data = core.normalize_session(_load_json(session_path))
+                data.setdefault("meta", {})["last_saved_cursor"] = -1
+                data["cursor"] = len(data.get("history", []) or [])
+                data.setdefault("runtime", {})["stack"] = [{"screen": "main_menu", "ctx": {}}]
+                data = core.rebuild(data)
+                if int(data.get("cursor", 0) or 0) < len(data.get("history", []) or []):
+                    data["history"] = data["history"][: int(data.get("cursor", 0) or 0)]
+                data.setdefault("meta", {})["last_saved_cursor"] = int(data.get("cursor", 0) or 0)
+                _write_json_atomic(session_path, data)
+                recovery_path = _make_recovery_path(session_path)
+                return session_path, recovery_path, data
 
 
 def _render_prompt(prompt: Dict[str, Any], last_error: Optional[str]) -> None:

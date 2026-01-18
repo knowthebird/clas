@@ -60,6 +60,7 @@ Navigation guide (search for these headers / functions):
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Dict, List, Optional, Tuple
@@ -68,7 +69,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.5"
+CLAS_CORE_VERSION = "0.2.6"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -100,7 +101,7 @@ def default_lock_config() -> Dict[str, Any]:
 
 
 def normalize_lock_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    cfg = dict(default_lock_config() if not isinstance(cfg, dict) else cfg)
+    cfg = copy.deepcopy(default_lock_config() if not isinstance(cfg, dict) else cfg)
 
     # normalize basics
     try:
@@ -377,9 +378,9 @@ def normalize_session(session: Session) -> Session:
 
     if "baseline_lock_config" not in meta:
         if not sess.get("history"):
-            meta["baseline_lock_config"] = dict(state.get("lock_config", default_lock_config()))
+            meta["baseline_lock_config"] = copy.deepcopy(state.get("lock_config", default_lock_config()))
         else:
-            meta["baseline_lock_config"] = default_lock_config()
+            meta["baseline_lock_config"] = copy.deepcopy(default_lock_config())
 
     rt = sess.get("runtime", {})
     if not isinstance(rt, dict):
@@ -760,7 +761,7 @@ def rebuild(session: Session) -> Session:
     fresh["meta"] = dict(session.get("meta", {}) or fresh["meta"])
     baseline = fresh["meta"].get("baseline_lock_config")
     if baseline is not None:
-        fresh["state"]["lock_config"] = normalize_lock_config(baseline)
+        fresh["state"]["lock_config"] = normalize_lock_config(copy.deepcopy(baseline))
 
     # Replay with prompt-id guard to avoid misapplying history after prompt changes.
     applied = 0
@@ -1002,7 +1003,7 @@ def _apply_settings_clear_confirm(session: Session, ctx: Dict[str, Any], confirm
         session["cursor"] = 0
         session.setdefault("runtime", {})["_suppress_history_once"] = True
         session["runtime"]["stack"] = [{"screen": "main_menu", "ctx": {}}]
-        session.setdefault("meta", {})["baseline_lock_config"] = dict(session["state"]["lock_config"])
+        session.setdefault("meta", {})["baseline_lock_config"] = copy.deepcopy(session["state"]["lock_config"])
     else:
         _pop(session)
     return True, None

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
+  "version": "0.2.6",
   "meta": {
     "session_name": "example-session",
     "baseline_lock_config": {
@@ -2359,7 +2359,7 @@
     },
     {
       "type": "input",
-      "text": "",
+      "text": "3",
       "prompt_id": "tutorial.show"
     }
   ],
