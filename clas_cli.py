@@ -456,7 +456,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
             out_path = _confirm_plot_path(out_path)
             if out_path is None:
                 return
-            _plot_sweep_png(rows, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            _plot_sweep_png(rows, wheel_swept, sweep_id, out_path, session_name=str(data.get('meta',{}).get('session_name','')))
             print(f"[Plot saved] {out_path}")
             print("Press Enter to continue.")
             return
@@ -474,7 +474,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
             out_path = _confirm_plot_path(out_path)
             if out_path is None:
                 return
-            _plot_sweep_png(ms, wheel_swept, sweep_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            _plot_sweep_png(ms, wheel_swept, sweep_id, out_path, session_name=str(data.get('meta',{}).get('session_name','')))
             print(f"[Plot saved] {out_path}")
             print("Press Enter to continue.")
             return
@@ -485,7 +485,7 @@ def _maybe_save_graph(prompt: dict, data: dict, session_path: Path) -> None:
             out_path = _confirm_plot_path(out_path)
             if out_path is None:
                 return
-            _plot_high_low_png(data["state"]["measurements"], test_id, out_path, session_name=str(data.get('state',{}).get('session_name','')))
+            _plot_high_low_png(data["state"]["measurements"], test_id, out_path, session_name=str(data.get('meta',{}).get('session_name','')))
             print(f"[Plot saved] {out_path}")
             print("Press Enter to continue.")
             return

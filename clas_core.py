@@ -3316,6 +3316,18 @@ def _prompt_single_wheel_sweep(session: Session, ctx: Dict[str, Any]) -> PromptS
             "default": default_key,
         }
 
+    if ctx["step"] == "record_contacts":
+        return {
+            "id":"enumw.record_contacts",
+            "kind":"choice",
+            "text":"Record LCP/RCP values for this sweep (for plotting later)?",
+            "choices":[
+                {"key":"1","label":"Yes"},
+                {"key":"2","label":"No"},
+            ],
+            "default":"2",
+        }
+
     # after choosing wheel, prompt fixed combination for other wheels (simple)
     if ctx["step"] == "enter_fixed":
         w = int(ctx["wheel"])
@@ -3352,6 +3364,17 @@ def _prompt_single_wheel_sweep(session: Session, ctx: Dict[str, Any]) -> PromptS
             ctx["gi"] = 0
         gi = int(ctx.get("gi",0) or 0)
         if gi >= len(ctx["gates"]):
+            if ctx.get("record_contacts"):
+                sweep_id = int(ctx.get("sweep_id", 0) or 0)
+                return {
+                    "id":"enumw.done",
+                    "kind":"confirm",
+                    "text":(
+                        f"Single-wheel sweep complete. Sweep saved as sweep={sweep_id}.\n"
+                        "You can plot this sweep later from the main menu.\n"
+                        "Press Enter to return."
+                    ),
+                }
             return {"id":"enumw.done","kind":"confirm","text":"Single-wheel sweep complete. Press Enter to return."}
         g = float(ctx["gates"][gi])
 
@@ -3363,6 +3386,33 @@ def _prompt_single_wheel_sweep(session: Session, ctx: Dict[str, Any]) -> PromptS
                 combo.append(g)
             else:
                 combo.append(float(ctx["fixed"][str(i)]))
+        if ctx.get("record_contacts"):
+            run_phase = str(ctx.get("run_phase", "lcp"))
+            if run_phase == "rcp":
+                return {
+                    "id":"enumw.rcp",
+                    "kind":"float",
+                    "text":(
+                        f"Cycle {gi+1}/{len(ctx['gates'])}\n"
+                        f"Refine {gi+1}/{len(ctx['gates'])} @ Wheel {w} = {_fmt_float(g)}\n"
+                        f"Try combination (wheel {w} varied): {_fmt_float_tuple(combo)}\n\n"
+                        "Turn left (CCW) until you hit the RCP. Enter RCP"
+                    ),
+                }
+            return {
+                "id":"enumw.lcp",
+                "kind":"float",
+                "text":(
+                    f"Cycle {gi+1}/{len(ctx['gates'])}\n"
+                    f"Refine {gi+1}/{len(ctx['gates'])} @ Wheel {w} = {_fmt_float(g)}\n"
+                    f"Try combination (wheel {w} varied): {_fmt_float_tuple(combo)}\n\n"
+                    f"Turn left (CCW) passing {_fmt_float(combo[0])} three times, stop on {_fmt_float(combo[0])}.\n"
+                    f"Turn right (CW) passing {_fmt_float(combo[0])} two times, stop on {_fmt_float(combo[1])}.\n"
+                    f"Turn left (CCW) passing {_fmt_float(combo[1])} one time, stop on {_fmt_float(combo[2])}.\n"
+                    "Turn right (CW) to test position.\n\n"
+                    "Turn right (CW) until you hit the LCP. Enter LCP"
+                ),
+            }
         return {
             "id":"enumw.result",
             "kind":"choice",
@@ -3393,6 +3443,14 @@ def _apply_single_wheel_sweep(session: Session, ctx: Dict[str, Any], parsed: Any
 
     if pid == "enumw.wheel":
         ctx["wheel"] = int(parsed)
+        ctx["step"] = "record_contacts"
+        return True, None
+
+    if pid == "enumw.record_contacts":
+        ctx["record_contacts"] = (str(parsed) == "1")
+        if ctx.get("record_contacts"):
+            ctx["sweep_id"] = _next_sweep_id(session)
+            ctx["run_phase"] = "lcp"
         ctx["step"] = "enter_fixed"
         return True, None
 
@@ -3442,6 +3500,43 @@ def _apply_single_wheel_sweep(session: Session, ctx: Dict[str, Any], parsed: Any
             att = {"combo": list(combo), "status": "closed" if res=="0" else "error"}
             session["state"]["metadata"].setdefault("enumeration_attempts", []).append(att)
         ctx["gi"] = gi + 1
+        return True, None
+
+    if pid == "enumw.lcp":
+        ctx["current_lcp"] = float(parsed)
+        ctx["run_phase"] = "rcp"
+        return True, None
+
+    if pid == "enumw.rcp":
+        lc = session["state"]["lock_config"]
+        dial_min = float(lc["dial_min"]); dial_max = float(lc["dial_max"])
+        wheels = int(lc.get("wheels",0) or 0)
+        w = int(ctx["wheel"])
+        gi = int(ctx.get("gi",0) or 0)
+        g = float(ctx["gates"][gi])
+        combo = []
+        for i in range(1, wheels+1):
+            if i == w:
+                combo.append(g)
+            else:
+                combo.append(float(ctx["fixed"][str(i)]))
+        lcp = float(ctx.get("current_lcp"))
+        rcp = float(parsed)
+        sweep_id = int(ctx.get("sweep_id", 0) or 0)
+        row = {
+            "id": _next_measurement_id(session, ctx),
+            "sweep": sweep_id,
+            "wheel_swept": w,
+            "left_contact": lcp,
+            "right_contact": rcp,
+            "contact_width": circular_distance(rcp, lcp, dial_min, dial_max),
+            "notes": "",
+        }
+        for i in range(1, wheels + 1):
+            row[f"combination_wheel_{i}"] = combo[i - 1]
+        session["state"]["measurements"].append(row)
+        ctx["gi"] = gi + 1
+        ctx["run_phase"] = "lcp"
         return True, None
 
     # if we just finished fixed entries:
