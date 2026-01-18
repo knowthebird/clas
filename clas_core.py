@@ -69,7 +69,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.7"
+CLAS_CORE_VERSION = "0.2.8"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -2422,25 +2422,28 @@ def _prompt_isolate_wheel_2(session: Session, ctx: Dict[str, Any]) -> PromptSpec
         ctx["offset"] = offset
         cycle_label = f"{oi+1}/{len(offsets)}"
         if oi + 1 >= 2:
-            if w3_suspected:
-                intro = f"passing {w3_suspected_label} one time"
-            else:
-                intro = f"passing {_fmt_float(w3)} one time"
-            continue_parts = []
-            if prev_offset is not None:
-                continue_parts.append(f"passing the last checkpoint {_fmt_float(prev_offset)} one time")
-            detail_text = "continue turning"
-            if continue_parts:
-                detail_text = f"continue turning {' and '.join(continue_parts)},"
-            text = (
-                f"Cycle {cycle_label}\n"
-                f"Turn right (CW) {intro}, then {detail_text} until you reach {_fmt_float(offset)}. Stop.\n"
-                f"   NOTE: If, during testing, the target point {_fmt_float(offset)} has passed the Wheel 3 suspected gate "
-                f"position ({w3_suspected_label}),\n   you must still complete one full revolution after passing "
-                f"({w3_suspected_label}) before stopping at {_fmt_float(offset)}.\n"
-                f"Turn left (CCW), pass {_fmt_float(offset)} once, then stop at {_fmt_float(w3)}.\n"
-                f"Turn right (CW) until you hit the LCP. Enter LCP.\n"
+            first_gate = float(w3_suspected[0]) if w3_suspected else None
+            prev_gate_matched_w3_gate = (
+                first_gate is not None
+                and prev_offset is not None
+                and round(first_gate, 6) == round(float(prev_offset), 6)
             )
+            if prev_gate_matched_w3_gate:
+                text = (
+                    f"Cycle {cycle_label}\n"
+                    f"Turn right (CW) to {w3_suspected_label}. Then continue turning past {w3_suspected_label}, making a full revolution to the last checkpoint "
+                    f"{_fmt_float(prev_offset)}. Then continue turning a small amount until you reach {_fmt_float(offset)}. Stop.\n"
+                    f"Turn left (CCW), pass {_fmt_float(offset)} once, then stop at {_fmt_float(w3)}.\n"
+                    f"Turn right (CW) until you hit the LCP. Enter LCP.\n"
+                )
+            else:
+                text = (
+                    f"Cycle {cycle_label}\n"
+                    f"Turn right (CW) to {w3_suspected_label}. Then continue turning past {w3_suspected_label} to the last checkpoint "
+                    f"{_fmt_float(prev_offset)}. Then continue turning a small amount until you reach {_fmt_float(offset)}. Stop.\n"
+                    f"Turn left (CCW), pass {_fmt_float(offset)} once, then stop at {_fmt_float(w3)}.\n"
+                    f"Turn right (CW) until you hit the LCP. Enter LCP.\n"
+                )
         else:
             text = (
                 f"Cycle {cycle_label}\n"
