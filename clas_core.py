@@ -69,7 +69,7 @@ Session = Dict[str, Any]
 PromptSpec = Dict[str, Any]
 Action = Dict[str, Any]
 
-CLAS_CORE_VERSION = "0.2.6"
+CLAS_CORE_VERSION = "0.2.7"
 FLOAT_DISPLAY_PRECISION = 2
 
 # -----------------------
@@ -1843,7 +1843,7 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
 
     if phase == "scan_between":
         p = float(ctx.get("current_p"))
-        return {
+        prompt = {
             "id":"iso3.scan.between",
             "kind":"choice",
             "text": f"Is {_fmt_float(p)} after the LCP and before RCP?",
@@ -1852,6 +1852,10 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 {"key":"2","label":"No"},
             ],
         }
+        last_between = ctx.get("last_between")
+        if last_between in ("1", "2"):
+            prompt["default"] = str(last_between)
+        return prompt
 
     if phase == "plot_offer":
         sweep_id = int(ctx.get("sweep_id", 0) or 0)
@@ -1962,7 +1966,7 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
 
     if phase == "refine_between":
         p = float(ctx.get("current_p"))
-        return {
+        prompt = {
             "id":"iso3.refine.between",
             "kind":"choice",
             "text": f"Is {_fmt_float(p)} after the LCP and before RCP?",
@@ -1971,6 +1975,10 @@ def _prompt_isolate_wheel_3(session: Session, ctx: Dict[str, Any]) -> PromptSpec
                 {"key":"2","label":"No"},
             ],
         }
+        last_between = ctx.get("last_between")
+        if last_between in ("1", "2"):
+            prompt["default"] = str(last_between)
+        return prompt
 
     if phase == "refine_rcp":
         j = int(ctx.get("j",0) or 0)
@@ -2084,7 +2092,9 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         return True, None
 
     if pid == "iso3.scan.between":
-        ctx["rcp_dir"] = "right" if str(parsed) == "1" else "left"
+        choice = str(parsed)
+        ctx["rcp_dir"] = "right" if choice == "1" else "left"
+        ctx["last_between"] = choice
         ctx["phase"] = "scan_rcp"
         return True, None
 
@@ -2211,7 +2221,9 @@ def _apply_isolate_wheel_3(session: Session, ctx: Dict[str, Any], parsed: Any, p
         return True, None
 
     if pid == "iso3.refine.between":
-        ctx["rcp_dir"] = "right" if str(parsed) == "1" else "left"
+        choice = str(parsed)
+        ctx["rcp_dir"] = "right" if choice == "1" else "left"
+        ctx["last_between"] = choice
         ctx["phase"] = "refine_rcp"
         return True, None
 
